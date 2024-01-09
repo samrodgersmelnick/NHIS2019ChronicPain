@@ -1,0 +1,21 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Engagement in Integrative and Nonpharmacologic Pain Management Modalities Among Adults with Chronic Pain"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Analysis code
+      - href: author_bio.qmd
+        text: Author Bio
+
+format:
+  html:
+    theme: flatly
+    linkcolor: blue
+    css: styles.css
+    toc: true
+
+editor: visual
