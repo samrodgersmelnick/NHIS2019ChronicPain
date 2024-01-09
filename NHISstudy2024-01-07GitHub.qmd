@@ -1,0 +1,2096 @@
+---
+title: "Engagement in Integrative and Nonpharmacologic Pain Management Modalities Among Adults with Chronic Pain"
+subtitle: "Analysis of the 2019 National Health Interview Survey"
+author: "Samuel N. Rodgers-Melnick, MPH, MT-BC"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: spacelab
+---
+
+## R Packages and Setup {.unnumbered}
+
+I loaded the following packages to ensure I had the necessary data cleaning, analysis, and visualization tools needed for this project. Given the number of packages, I used `conflict_prefer()` to ensure functions would not interfere with each other. I also loaded `uhred` for use in plots.
+
+```{r}
+#| message: false
+#| warning: false
+knitr::opts_chunk$set(comment = NA) # do not remove this
+
+library(janitor)
+library(gt)
+library(naniar)
+library(rms)
+library(patchwork)
+library(Epi)
+library(car)
+library(caret)
+library(GGally)
+library(pscl)
+library(VGAM)
+library(MASS)
+library(flextable)
+library(mosaic)
+library(pROC)
+library(ROCR)
+library(gtsummary)
+library(simputation)
+library(ggrepel)
+library(nnet)
+library(kableExtra)
+library(conflicted)
+library(survey)
+library(tidymodels)
+library(tidyverse)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("mean", "base")
+conflict_prefer("sum", "base")
+conflict_prefer("vif", "car")
+conflict_prefer("count", "dplyr")
+
+uhred <- "#B70022" 
+
+theme_set(theme_bw())
+```
+
+# Data Source
+
+## National Health Interview Survey
+
+The data for this project comes from the [2019 National Health Interview Survey (NHIS) Website](https://www.cdc.gov/nchs/nhis/2019nhis.htm) (National Center for Health Statistics, 2021). To obtain the data, I downloaded the [CSV data file for the Sample Adult Interview](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Datasets/NHIS/2019/adult19csv.zip) to my local hard drive and unzipped the `adult19.csv` file.
+
+According to the [National Health Interview Survey website](https://www.cdc.gov/nchs/nhis/about_nhis.htm):
+
+**Purpose:** "The main objective of the NHIS is to monitor the health of the United States population through the collection and analysis of data on a broad range of health topics. NHIS data are used widely throughout the Department of Health and Human Services (HHS) to monitor trends in illness and disability and to track progress toward achieving national health objectives. The data are also used by the public health research community for epidemiological and policy analysis of such timely issues as characterizing those with various health problems, determining barriers to accessing and using appropriate health care, and evaluating Federal health programs."
+
+**Design:** The NHIS is a cross-sectional household interview survey.
+
+**Target population:** "The target population for the NHIS is the civilian non-institutionalized population residing within the 50 states and the District of Columbia at the time of the interview. Persons excluded from the universe are those with no fixed household address (e.g., homeless and/or transient persons not residing in shelters), active duty military personnel, and civilians living on military bases, persons in long-term care institutions (e.g., nursing homes for the elderly, hospitals for the chronically ill or physically or intellectually disabled, and wards for abused or neglected children), persons in correctional facilities (e.g., prisons or jails, juvenile detention centers, and halfway houses), and U.S. nationals living in foreign countries. While active-duty Armed Forces personnel cannot be sampled for inclusion in the survey, any civilians residing with Armed Forces personnel in non-military housing are eligible to be sampled."
+
+**Sampling strategy:** "To keep survey operations manageable, cost-effective, and timely, the NHIS uses geographically clustered sampling techniques to select the sample of dwelling units for the NHIS. The sample is designed in such a way that each month's sample is nationally representative. Data collection on the NHIS is continuous, i.e., from January to December each year."
+
+"One 'sample adult' aged 18 years or older and one 'sample child' aged 17 years or younger (if any children live in the household) are randomly selected from each household following a brief initial interview that identifies everyone who usually lives or stays in the household. Information about the sample adult is collected from the sample adult herself or himself unless she or he is physically or mentally unable to do so, in which case a knowledgeable proxy can answer for the sample adult. Information about the sample child is collected from a parent or adult who is knowledgeable about and responsible for the health care of the sample child. This respondent may or may not also be the sample adult."
+
+**Data collection procedures:** "The U.S. Census Bureau, under a contractual agreement, is the data collection agent for the NHIS. NHIS data are collected continuously throughout the year by Census interviewers. Nationally, about 750 interviewers (also called 'Field Representatives') are trained and directed by health survey supervisors in the U.S. Census Bureau Regional Offices to conduct interviews for NHIS.
+
+The NHIS is conducted using computer-assisted personal interviewing. Face-to-face interviews are conducted in respondents' homes, but follow-ups to complete interviews may be conducted over the telephone. A telephone interview may also be conducted when the respondent requests a telephone interview or when road conditions or travel distances would make it difficult to schedule a personal visit before the required completion date. In 2019, 34.3% of the Sample Adult interviews and 31.7% of the Sample Child interviews were conducted at least partially by telephone."
+
+## The Subjects
+
+Subjects included in this project are adults (18 years and older) with chronic pain as defined by responding "most days" or "every day" to the survey question, "In the past 3 months, how often did you have pain?" (Zelaya et al., 2020).
+
+# Research Questions
+
+Which demographic, mental health, and pain-related variables are associated with engagement in: (1) the number of IHM modalities used for pain and (2) exclusively nonpharmacologic modalities rather than opioid utilization among U.S. adults with chronic pain.
+
+# Data Ingest and Management
+
+## Loading the Raw Data
+
+I ingested the `adult19.csv` raw data that I downloaded and unzipped from the [2019 National Health Interview Survey (NHIS) Website](https://www.cdc.gov/nchs/nhis/2019nhis.htm) as `projectb_raw` using the `read_csv()` function.
+
+```{r, warning = FALSE}
+projectb_raw <- read_csv("data/adult19.csv", show_col_types = FALSE)
+```
+
+## Cleaning the Data
+
+In the following code, I created a new tibble, `projectb_clean`, limited to respondents who stated that they had pain on most days (PAIFRQ3M_A = 3) or everyday (PAIFRQ3M_A = 4) in response to the question PAIFRQ3M_A, "In the past three months, how often did you have pain?" as this matched the chronic pain definition reported by the National Center for Health Statistics (Zelaya et al., 2020). I also set the filter at PAIFRQ3M_A \< 7 to exclude responses that were missing, refused, non ascertained, or "don't know" in response to the chronic pain question.
+
+After filtering to the chronic pain cohort, I selected the variables from the NHIS that I needed for this analysis.
+
+```{r}
+projectb_clean <- projectb_raw |>
+  filter(PAIFRQ3M_A >= 3 & PAIFRQ3M_A < 7) |> #Limited to pain on most days or everyday per Zelaya et al. (2020)
+  select(subject_id = HHX, age = AGEP_A, sex = SEX_A,
+         wt_final = WTFA_A,
+         education = EDUC_A, urban_rural = URBRRL,
+         painlimit_lifework = PAIWKLM3M_A,
+         anymeds12mo = RX12M_A, opioids12mo = OPD12M_A, opioids3mo = OPD3M_A, 
+         opioids_chonpain3mo = OPDCHRONIC_A, opioid_freq3mo = OPDFREQ_A,
+         GAD71_A, GAD72_A, GAD73_A, GAD74_A, 
+         GAD75_A, GAD76_A, GAD77_A, anx_severity = GADCAT_A,
+         back_pain = PAIBACK3M_A, upper_ext_pain = PAIULMB3M_A,
+         lower_ext_pain = PAILLMB3M_A, headache_migraine = PAIHDFC3M_A,
+         abd_pelvic_pain = PAIAPG3M_A, tooth_jaw_pain = PAITOOTH3M_A,
+         chiro = PAICHIRO_A, yoga_taichi = PAIYOGA_A, 
+         massage = PAIMASSAGE_A, meditation = PAIMEDITAT_A,
+         race_ethnicity = HISPALLP_A, fam_income = FAMINCTC_A,
+         pt_rehab_ot = PAIPHYSTPY_A, talk_therapy = PAITALKTPY_A,
+         chron_pain_selfmgmt = PAIPROGRAM_A, peer_support_grp = PAIGROUP_A,
+         PHQ81_A, PHQ82_A, PHQ83_A, PHQ84_A, PHQ85_A, 
+         PHQ86_A, PHQ87_A, PHQ88_A, dep_severity = PHQCAT_A)
+```
+
+### Recode Refused, Not Ascertained, and Don't Know as Missing
+
+Using the [2019 NHIS Codebook](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHIS/2019/adult-codebook.pdf), I recoded all responses that were Refused, Not Ascertained, or Don't Know as `NA`.
+
+```{r}
+projectb_clean$age[projectb_clean$age >= 97] <- NA
+projectb_clean$sex[projectb_clean$sex >= 7] <- NA
+projectb_clean$education[projectb_clean$education >= 97] <- NA
+projectb_clean$painlimit_lifework[projectb_clean$painlimit_lifework >= 7] <- NA
+projectb_clean$anymeds12mo[projectb_clean$anymeds12mo >= 7] <- NA
+projectb_clean$opioids12mo[projectb_clean$opioids12mo >= 7] <- NA
+projectb_clean$opioids3mo[projectb_clean$opioids3mo >= 7] <- NA
+projectb_clean$opioids_chonpain3mo[projectb_clean$opioids_chonpain3mo >= 7] <- NA
+projectb_clean$opioid_freq3mo[projectb_clean$opioid_freq3mo >= 7] <- NA
+projectb_clean$GAD71_A[projectb_clean$GAD71_A >= 7] <- NA
+projectb_clean$GAD72_A[projectb_clean$GAD72_A >= 7] <- NA
+projectb_clean$GAD73_A[projectb_clean$GAD73_A >= 7] <- NA
+projectb_clean$GAD74_A[projectb_clean$GAD74_A >= 7] <- NA
+projectb_clean$GAD75_A[projectb_clean$GAD75_A >= 7] <- NA
+projectb_clean$GAD76_A[projectb_clean$GAD76_A >= 7] <- NA
+projectb_clean$GAD77_A[projectb_clean$GAD77_A >= 7] <- NA
+projectb_clean$anx_severity[projectb_clean$anx_severity >= 8] <- NA
+
+
+projectb_clean$back_pain[projectb_clean$back_pain >= 7] <- NA
+projectb_clean$upper_ext_pain[projectb_clean$upper_ext_pain >= 7] <- NA
+projectb_clean$lower_ext_pain[projectb_clean$lower_ext_pain >= 7] <- NA
+projectb_clean$headache_migraine[projectb_clean$headache_migraine >= 7] <- NA
+projectb_clean$abd_pelvic_pain[projectb_clean$abd_pelvic_pain >= 7] <- NA
+projectb_clean$tooth_jaw_pain[projectb_clean$tooth_jaw_pain >= 7] <- NA
+
+projectb_clean$chiro[projectb_clean$chiro >= 7] <- NA
+projectb_clean$yoga_taichi[projectb_clean$yoga_taichi >= 7] <- NA
+projectb_clean$massage[projectb_clean$massage >= 7] <- NA
+projectb_clean$meditation[projectb_clean$meditation >= 7] <- NA
+
+projectb_clean$race_ethnicity[projectb_clean$race_ethnicity >= 97] <- NA
+
+projectb_clean$pt_rehab_ot[projectb_clean$pt_rehab_ot >= 7] <- NA
+projectb_clean$talk_therapy[projectb_clean$talk_therapy >= 7] <- NA
+projectb_clean$chron_pain_selfmgmt[projectb_clean$chron_pain_selfmgmt >= 7] <- NA
+projectb_clean$peer_support_grp[projectb_clean$peer_support_grp >= 7] <- NA
+
+projectb_clean$PHQ81_A[projectb_clean$PHQ81_A >= 7] <- NA
+projectb_clean$PHQ82_A[projectb_clean$PHQ82_A >= 7] <- NA
+projectb_clean$PHQ83_A[projectb_clean$PHQ83_A >= 7] <- NA
+projectb_clean$PHQ84_A[projectb_clean$PHQ84_A >= 7] <- NA
+projectb_clean$PHQ85_A[projectb_clean$PHQ85_A >= 7] <- NA
+projectb_clean$PHQ86_A[projectb_clean$PHQ86_A >= 7] <- NA
+projectb_clean$PHQ87_A[projectb_clean$PHQ87_A >= 7] <- NA
+projectb_clean$PHQ88_A[projectb_clean$PHQ88_A >= 7] <- NA
+projectb_clean$dep_severity[projectb_clean$dep_severity >= 8] <- NA
+```
+
+### Recode Binary Variables From (1 = Yes, 2 = No) to (1 = Yes, 0 = No)
+
+In the following code, I recoded binary variables with initial responses in the format, 1 = Yes, 2 = No, to binary variables coded as 1 = Yes, 0 = No using the `mutate()` function, subtracting 2 from the variables `chiro`, `yoga_taichi`, `massage`, `meditation`, `anymeds12mo`, `opioids12mo`, `opioids3mo`, `opioids_chonpain3mo`, `pt_rehab_ot`, `talk_therapy`, `chron_pain_selfmgmt`, and `peer_support_grp`.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(chiro = as.numeric(2 - chiro),
+         yoga_taichi = as.numeric(2 - yoga_taichi),
+         massage = as.numeric(2 - massage),
+         meditation = as.numeric(2 - meditation),
+         anymeds12mo = as.numeric(2 - anymeds12mo),
+         opioids12mo = as.numeric(2 - opioids12mo),
+         opioids3mo = as.numeric(2 - opioids3mo),
+         opioids_chonpain3mo = as.numeric(2 - opioids_chonpain3mo),
+         pt_rehab_ot = as.numeric(2 - pt_rehab_ot),
+         talk_therapy = as.numeric(2 - talk_therapy),
+         chron_pain_selfmgmt = as.numeric(2 - chron_pain_selfmgmt),
+         peer_support_grp = as.numeric(2 - peer_support_grp))
+```
+
+### Recode Categorical Variables to Meaningful Factors
+
+Using the [2019 NHIS Codebook](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHIS/2019/adult-codebook.pdf), I recoded the following variables to meaningful, ascending, and ordered factors using the `mutate()` and `factor()` functions. To make `race_ethnicity` 6 categories, I combined "NH Amer Indian Alaska Natv only" and "NH Amer Indian Alaska Natv and any other group" into "NH Amer Indian Alaska Natv."
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(sex = factor(case_when(
+    sex == 1 ~ "Male",
+    sex == 2 ~ "Female"))) |>
+  mutate(race_ethnicity = case_when(
+    race_ethnicity == 1 ~ "Hispanic",
+    race_ethnicity == 2 ~ "NH White only",
+    race_ethnicity == 3 ~ "NH Black/African American only",
+    race_ethnicity == 4 ~ "NH Asian only",
+    race_ethnicity == 5 ~ "NH Amer Indian Alaska Natv",
+    race_ethnicity == 6 ~ "NH Amer Indian Alaska Natv",
+    race_ethnicity == 7 ~ "Other single and multiple races")) |>
+  mutate(race_ethnicity = 
+           factor(race_ethnicity, 
+                  levels = c("NH White only", 
+                             "Hispanic", 
+                             "NH Black/African American only", 
+                             "NH Asian only", 
+                             "NH Amer Indian Alaska Natv",
+                             "Other single and multiple races"))) |>
+  mutate(painlimit_lifework = case_when(
+    painlimit_lifework == 1 ~ "Never",
+    painlimit_lifework == 2 ~ "Some days",
+    painlimit_lifework == 3 ~ "Most days",
+    painlimit_lifework == 4 ~ "Every day")) |>
+  mutate(painlimit_lifework = factor(painlimit_lifework, 
+                                     levels = c("Never", 
+                                                "Some days", 
+                                                "Most days", 
+                                                "Every day"))) |>
+  mutate(anx_severity = case_when(
+    anx_severity == 1 ~ "None/Minimal",
+    anx_severity == 2 ~ "Mild",
+    anx_severity == 3 ~ "Moderate",
+    anx_severity == 4 ~ "Severe")) |>
+  mutate(anx_severity = factor(anx_severity, 
+                               levels = c("None/Minimal", 
+                                          "Mild", 
+                                          "Moderate", 
+                                          "Severe"))) |>
+  mutate(dep_severity = case_when(
+    dep_severity == 1 ~ "None/Minimal",
+    dep_severity == 2 ~ "Mild",
+    dep_severity == 3 ~ "Moderate",
+    dep_severity == 4 ~ "Severe")) |>
+  mutate(dep_severity = factor(dep_severity, 
+                               levels = c("None/Minimal", 
+                                          "Mild", 
+                                          "Moderate", 
+                                          "Severe"))) |>
+  mutate(opioid_freq3mo = case_when(
+    opioid_freq3mo == 1 ~ "Some days",
+    opioid_freq3mo == 2 ~ "Most days",
+    opioid_freq3mo == 3 ~ "Every day")) |>
+  mutate(opioid_freq3mo = factor(opioid_freq3mo, levels = c("Some days", 
+                                                        "Most days", 
+                                                        "Every day"))) |>
+  mutate(education = case_when(
+    education == 0 ~ "Less than high school",
+    education == 1 ~ "Less than high school",
+    education == 2 ~ "Less than high school",
+    education == 3 ~ "High school graduate/GED",
+    education == 4 ~ "High school graduate/GED",
+    education == 5 ~ "Some college, no degree",
+    education == 6 ~ "Associate's or bachelor's degree",
+    education == 7 ~ "Associate's or bachelor's degree",
+    education == 8 ~ "Associate's or bachelor's degree",
+    education == 9 ~ "Master's, doctoral, or professional degree",
+    education == 10 ~ "Master's, doctoral, or professional degree",
+    education == 11 ~ "Master's, doctoral, or professional degree")) |>
+  mutate(education = factor(education, levels = c("Less than high school", 
+                                                  "High school graduate/GED",
+                                                  "Some college, no degree",
+                                                  "Associate's or bachelor's degree",
+                                                  "Master's, doctoral, or professional degree"))) |>
+  mutate(urban_rural = case_when(
+    urban_rural == 1 ~ "Large central metro",
+    urban_rural == 2 ~ "Large fringe metro",
+    urban_rural == 3 ~ "Medium and small metro",
+    urban_rural == 4 ~ "Nonmetropolitan")) |>
+  mutate(urban_rural = factor(urban_rural, levels = c("Nonmetropolitan", 
+                                                      "Medium and small metro", 
+                                                      "Large fringe metro",
+                                                      "Large central metro")))
+```
+
+### Calculate GAD-7 total
+
+In the following code, I recoded the original NHIS responses to conform to the actual scoring method for the GAD-7 (Löwe et al., 2008). I then calculated `gad7total` by adding each of the individual GAD-7 responses. Finally, to verify that `gad7total` was scored correctly, I summarized `gad7total` by `anx_severity` using `favstats()` to ensure that the values were in range. Interestingly, in the 2019 NHIS, it appears that they scored subjects even if they had missing individual items on the GAD-7.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(GAD71_A = case_when(
+    GAD71_A == 1 ~ 0,
+    GAD71_A == 2 ~ 1,
+    GAD71_A == 3 ~ 2,
+    GAD71_A == 4 ~ 3)) |>
+  mutate(GAD72_A = case_when(
+    GAD72_A == 1 ~ 0,
+    GAD72_A == 2 ~ 1,
+    GAD72_A == 3 ~ 2,
+    GAD72_A == 4 ~ 3)) |>
+  mutate(GAD73_A = case_when(
+    GAD73_A == 1 ~ 0,
+    GAD73_A == 2 ~ 1,
+    GAD73_A == 3 ~ 2,
+    GAD73_A == 4 ~ 3)) |>
+  mutate(GAD74_A = case_when(
+    GAD74_A == 1 ~ 0,
+    GAD74_A == 2 ~ 1,
+    GAD74_A == 3 ~ 2,
+    GAD74_A == 4 ~ 3)) |>
+  mutate(GAD75_A = case_when(
+    GAD75_A == 1 ~ 0,
+    GAD75_A == 2 ~ 1,
+    GAD75_A == 3 ~ 2,
+    GAD75_A == 4 ~ 3)) |>
+  mutate(GAD76_A = case_when(
+    GAD76_A == 1 ~ 0,
+    GAD76_A == 2 ~ 1,
+    GAD76_A == 3 ~ 2,
+    GAD76_A == 4 ~ 3)) |>
+  mutate(GAD77_A = case_when(
+    GAD77_A == 1 ~ 0,
+    GAD77_A == 2 ~ 1,
+    GAD77_A == 3 ~ 2,
+    GAD77_A == 4 ~ 3)) |>
+  mutate(gad7total = GAD71_A + GAD72_A + GAD73_A + 
+           GAD74_A + GAD75_A + GAD76_A + GAD77_A)
+
+favstats(gad7total ~ anx_severity, data = projectb_clean) |> 
+  flextable() |>
+  colformat_double(digits = 2) |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+### Calculate PHQ-8 Total
+
+In the following code, I recoded the original NHIS responses to conform to the actual scoring method for the PHQ-8 (Kroenke et al., 2001). I then calculated `phq8total` by adding each of the individual PHQ-8 responses.
+
+Finally, to verify that `phq8total` was scored correctly, I summarized `phq8total` by `dep_severity` using `favstats()` to ensure that the values were in range. Interestingly, in the 2019 NHIS, it appears that they dropped "moderate-to-severe depression" as a value given that they did not use the full PHQ-9, and they scored subjects even if they had missing individual items on the PHQ-8.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(PHQ81_A = case_when(
+    PHQ81_A == 1 ~ 0,
+    PHQ81_A == 2 ~ 1,
+    PHQ81_A == 3 ~ 2,
+    PHQ81_A == 4 ~ 3)) |>
+  mutate(PHQ82_A = case_when(
+    PHQ82_A == 1 ~ 0,
+    PHQ82_A == 2 ~ 1,
+    PHQ82_A == 3 ~ 2,
+    PHQ82_A == 4 ~ 3)) |>
+  mutate(PHQ83_A = case_when(
+    PHQ83_A == 1 ~ 0,
+    PHQ83_A == 2 ~ 1,
+    PHQ83_A == 3 ~ 2,
+    PHQ83_A == 4 ~ 3)) |>
+  mutate(PHQ84_A = case_when(
+    PHQ84_A == 1 ~ 0,
+    PHQ84_A == 2 ~ 1,
+    PHQ84_A == 3 ~ 2,
+    PHQ84_A == 4 ~ 3)) |>
+  mutate(PHQ85_A = case_when(
+    PHQ85_A == 1 ~ 0,
+    PHQ85_A == 2 ~ 1,
+    PHQ85_A == 3 ~ 2,
+    PHQ85_A == 4 ~ 3)) |>
+  mutate(PHQ86_A = case_when(
+    PHQ86_A == 1 ~ 0,
+    PHQ86_A == 2 ~ 1,
+    PHQ86_A == 3 ~ 2,
+    PHQ86_A == 4 ~ 3)) |>
+  mutate(PHQ87_A = case_when(
+    PHQ87_A == 1 ~ 0,
+    PHQ87_A == 2 ~ 1,
+    PHQ87_A == 3 ~ 2,
+    PHQ87_A == 4 ~ 3)) |>
+  mutate(PHQ88_A = case_when(
+    PHQ88_A == 1 ~ 0,
+    PHQ88_A == 2 ~ 1,
+    PHQ88_A == 3 ~ 2,
+    PHQ88_A == 4 ~ 3)) |>
+  mutate(phq8total = PHQ81_A + PHQ82_A + PHQ83_A + PHQ84_A + 
+           PHQ85_A + PHQ86_A + PHQ87_A + PHQ88_A)
+
+favstats(phq8total ~ dep_severity, data = projectb_clean) |> 
+  flextable() |>
+  colformat_double(digits = 2) |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+### Integrative Health and Medicine (IHM) Variables
+
+In the following code, I performed the following steps to create the 5-level count outcome, `ihm4pain_num`, and the binary variable, `ihm4pain_bin`.
+
+-   First, I used the `mutate()` function to create `ihm4pain_num` as the sum of engaging in `chiro`, `yoga_taichi`, `massage`, or `meditation` to manage pain in the past 3 months.
+-   Then, I created the binary outcome, `ihm4pain_bin`, which was equal to 1 if `ihm4pain_num` \>= 1 and equal to 0 if `ihm4pain_num` == 0.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(ihm4pain_num = chiro + yoga_taichi + massage + meditation,
+         ihm4pain_bin = case_when(ihm4pain_num >= 1 ~ 1,
+                                  ihm4pain_num == 0 ~ 0))
+```
+
+### Opioid frequency
+
+To create a single variable describing frequency of opioid use in the past 3 months to manage chronic pain, I performed the following steps:
+
+-   First, since 1) the opioid frequency question was only asked to subjects who were taking prescription medications and opioid medications and 2) subjects responding "No" to the prescription medication and opioid use questions would be assumed to have never taken opioids in the past 3 months, I coded `opioid_freq3mo_final` as equal to "Never" if the subject answered "No" to `anymeds12mo`, `opioids12mo`, `opioids3mo`, or `opioids_chonpain3mo`.
+-   Next, if subjects responded "Some days", "Most days", "Every day" to the `opioid_freq3mo` question, I coded the `opioid_freq3mo_final` variable as equal to that response.
+-   Finally, I coded `opioid_freq3mo_final` as a meaningfully ordered factor.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(opioid_freq3mo_final = case_when(
+    anymeds12mo == 0|
+      opioids12mo == 0|
+      opioids3mo == 0|
+      opioids_chonpain3mo == 0 ~ "Never",
+    opioid_freq3mo %in% c("Some days", "Most days", "Every day") ~ 
+      opioid_freq3mo),
+  opioid_freq3mo_final = factor(opioid_freq3mo_final, 
+                                levels = c("Never",
+                                           "Some days",
+                                           "Most days",
+                                           "Every day")))
+```
+
+### Number of Pain Locations
+
+To create a single variable quantifying the total number of locations in which subjects reported being bothered at least "a little" by pain in the past three months, I performed the following steps:
+
+-   I converted the 6 individual pain variables to binary variables such that 1 indicated being bothered at least "a little" (\>= 2), and 0 meant "Not at all."
+-   I then calculated `num_pain_locations` as the sum of those binary variables, ignoring missingness using the `rowSums()` function.
+-   Finally, I used `mutate()` and `if_else()` to mark `num_pain_locations` as missing if all pain locations were missing.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(back_pain = if_else(back_pain >= 2, 1, 0),
+         upper_ext_pain = if_else(upper_ext_pain >= 2, 1, 0),
+         lower_ext_pain = if_else(lower_ext_pain >= 2, 1, 0),
+         headache_migraine = if_else(headache_migraine >= 2, 1, 0),
+         abd_pelvic_pain = if_else(abd_pelvic_pain >= 2, 1, 0),
+         tooth_jaw_pain = if_else(tooth_jaw_pain >= 2, 1, 0))
+
+projectb_clean$num_pain_locations <- rowSums(projectb_clean[,c("back_pain",
+                                             "upper_ext_pain",
+                                             "lower_ext_pain",
+                                             "headache_migraine",
+                                             "abd_pelvic_pain",
+                                             "tooth_jaw_pain")], na.rm=TRUE)
+
+projectb_clean <- projectb_clean |>
+  mutate(num_pain_locations = if_else(
+    is.na(back_pain) & is.na(upper_ext_pain) &
+      is.na(lower_ext_pain) & is.na(headache_migraine) &
+      is.na(abd_pelvic_pain) & is.na(tooth_jaw_pain), NA, num_pain_locations))
+```
+
+### Chronic Pain Treatment Category - SUPPORT
+
+In the following code, I performed the following steps to create the 4-category outcome, `pain_tx_type`.
+
+-   First, I used the `mutate()` function to create `support4pain_num` as the sum of engaging in `pt_rehab_ot`, `talk_therapy`, `chron_pain_selfmgmt`, or `peer_support_grp` to manage pain in the past 3 months. In this case, **SUPPORT** stands for **SU**pportive, **P**hysical, **P**sychological, **O**ccupational, or **R**ehabilitative **T**herapies.
+-   Next, I created the binary outcome, `support4pain_bin`, which was equal to 1 if `support4pain_num` \>= 1 and equal to 0 if `support4pain_num` == 0.
+-   Then, I created the outcome variable `pain_tx_type` as equal to None, IHM only, SUPPORT only, or SUPPORT and IHM based on the the `support4pain_num` and `ihm4pain_bin` variables.
+-   Finally, I ensured `pain_tx_type` was coded as a factor using the `factor` function, with "None" as the reference category.
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(support4pain_num = pt_rehab_ot + talk_therapy + 
+           chron_pain_selfmgmt + peer_support_grp,
+         support4pain_bin = case_when(support4pain_num >= 1 ~ 1,
+                                  support4pain_num == 0 ~ 0),
+         pain_tx_type = case_when(
+           ihm4pain_bin == 0 & support4pain_bin == 0 ~ "None",
+           ihm4pain_bin == 1 & support4pain_bin == 0 ~ "IHM only",
+           ihm4pain_bin == 0 & support4pain_bin == 1 ~ "SUPPORT only",
+           ihm4pain_bin == 1 & support4pain_bin == 1 ~ "SUPPORT and IHM"),
+         pain_tx_type = factor(pain_tx_type, levels = c("None", 
+                                                        "IHM only", 
+                                                        "SUPPORT only", 
+                                                        "SUPPORT and IHM")))
+```
+
+### Chronic Pain Treatment Category - Opioids
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(nonpharm_opioid = case_when(
+    opioid_freq3mo_final == "Never" &
+      ihm4pain_bin == 0 & support4pain_bin == 0 ~ "None",
+    opioid_freq3mo_final %in% c("Some days",
+                                "Most days",
+                                "Every day") &
+      ihm4pain_bin == 0 & support4pain_bin == 0 ~ "Opioids only",
+    opioid_freq3mo_final == "Never" &
+      (ihm4pain_bin == 1|support4pain_bin == 1) ~ "Nonpharm only",
+    opioid_freq3mo_final %in% c("Some days",
+                                "Most days",
+                                "Every day") &
+      (ihm4pain_bin == 1|support4pain_bin == 1) ~ "Opioids + Nonpharm"),
+    nonpharm_opioid = factor(nonpharm_opioid, levels = c("None", 
+                                                     "Opioids only", 
+                                                     "Nonpharm only", 
+                                                     "Opioids + Nonpharm")))
+
+
+projectb_clean |> tabyl(nonpharm_opioid) |>
+  adorn_pct_formatting() |>
+  flextable() |>
+  colformat_double(digits = 0) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+### IHM Category
+
+```{r}
+projectb_clean <- projectb_clean |>
+  mutate(manualtx4pain = case_when(
+    chiro + massage >= 1 ~ 1,
+    chiro + massage == 0 ~ 0),
+    mindbodytx4pain = case_when(
+      yoga_taichi + meditation >= 1 ~ 1,
+      yoga_taichi + meditation  == 0 ~ 0),
+    ihm4pain_cat = case_when(
+      manualtx4pain + mindbodytx4pain == 0 ~ "None",
+      manualtx4pain == 1 & mindbodytx4pain == 0 ~ "Manual only",
+      manualtx4pain == 0 & mindbodytx4pain == 1 ~ "Mind-body only",
+      manualtx4pain == 1 & mindbodytx4pain == 1 ~ "Manual and mind-body"),
+    ihm4pain_cat = factor(ihm4pain_cat, levels = c("None", 
+                                                   "Manual only", 
+                                                   "Mind-body only", 
+                                                   "Manual and mind-body")))
+projectb_clean |> tabyl(ihm4pain_cat) |>
+  adorn_pct_formatting() |>
+  flextable() |>
+  colformat_double(digits = 0) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+### Selecting Variables I Used and Arranging the Tibble
+
+With all variables recoded, I created the `projectb_data` tibble as a subset of `projectb_clean`, limited to the variables needed for analysis and subjects with complete data on the outcomes, `ihm4pain_num` and `nonpharm_opioid`. I also renamed `opioid_freq3mo_final` as `opioid_freq3mo`.
+
+```{r}
+projectb_data <- projectb_clean |>
+  select(subject_id, age, sex, education, urban_rural,
+         painlimit_lifework, opioid_freq3mo = opioid_freq3mo_final,
+         gad7total, phq8total, num_pain_locations,
+         ihm4pain_num, race_ethnicity, fam_income, 
+         nonpharm_opioid, ihm4pain_bin, ihm4pain_cat, wt_final) |>
+  filter(!is.na(ihm4pain_num), !is.na(nonpharm_opioid))
+```
+
+
+### Working with Categorical Predictors
+
+To examine distribution of categorical predictors, I used the `tbl_summary()` function to summarize the factor variables in `projectb_data`.
+
+```{r}
+projectb_data |> select(where(~ is.factor(.x))) |>
+  tbl_summary() |>
+  modify_header(label ~ "**Variable**") |>
+  bold_labels()
+```
+
+In examining the table above, I decided that the variable `race_ethnicity` required some collapsing of categories to ensure all categories contained at least 25 subjects in the testing and training samples. Therefore, I combined the `race_ethnicity` categories "NH Asian only", "NH Amer Indian Alaska Natv", and "Other single and multiple races" into "Other single and multiple races."
+
+```{r}
+projectb_data <- projectb_data |>
+  mutate(race_ethnicity = case_when(
+    race_ethnicity == "NH White only" ~ "NH White only",
+    race_ethnicity == "Hispanic" ~ "Hispanic",
+    race_ethnicity == "NH Black/African American only" ~ 
+      "NH Black/African American only",
+    race_ethnicity == "NH Asian only" ~ "Other single and multiple races",
+    race_ethnicity == "NH Amer Indian Alaska Natv" ~ 
+      "Other single and multiple races",
+    race_ethnicity == "Other single and multiple races" ~ 
+      "Other single and multiple races")) |>
+  mutate(race_ethnicity = factor(race_ethnicity, 
+                                 levels = c("NH White only", 
+                                            "Hispanic", 
+                                            "NH Black/African American only", 
+                                            "Other single and multiple races")))
+```
+
+## Print and Save The Final Tibble
+
+Next, I verified that `projectb_data` was a tibble by printing it. In this tibble, I can confirm that:
+
+-   It is a tibble and thus calling it prints only the first 10 rows.
+-   The initial row tells me that this is a tibble and specifies its dimensions.
+-   I have a complete set of 7,114 NHIS subjects.
+-   I've included only 17 variables
+
+```{r}
+projectb_data
+```
+
+### Save The Tibble
+
+Finally, I saved the final tibble, `projectb_data`, as an Rds file using the `saveRDS()` function.
+
+```{r}
+saveRDS(projectb_data, file = "data/projectb_data2024-01-07.Rds")
+```
+
+# Code Book and Description
+
+## Defining the Variables
+
+7,114 adults ages 18-85 with pain on most days or every day in the past 3 months and participating in the 2019 NHIS with data on the variables listed in the table below.
+
+For each of my 17 selected variables, I have included the original variable name from the raw NHIS file.
+
+Variable | Role | Type | Description (units/levels) | Original NHIS Variable Name
+--------- | ---- | ---- | :------------------------------: | ---------- |
+`subject_id` | identifier | - | Randomly assigned household number unique to a household (H000074-H064180) | HHX
+`age` | input | quant | Age of subject | AGEP_A
+`sex` | input | 2-cat | Sex (Male or Female) | SEX_A
+`education` | input | 5-cat | Education level (Less than high school; High school graduate/GED; Some college, no degree; Associate's or bachelor's degree; Master's, doctoral, or professional degree) | EDUC_A
+`urban_rural` | input | 4-cat | Urban-rural classification scheme for counties (Large central metro, Large fringe metro, Medium and small metro, Non-metropolitan) | URBRRL
+`painlimit_lifework` | input | 4-cat | How often pain limited the subject's life or work activities in the past 3 months (Never, Some days, Most days, or Every day) | PAIWKLM3M_A
+`opioid_freq3mo` | input | 4-cat | How often the subject took a prescription opioid for chronic pain in the past three months (Never, Some days, Most days, or Every day) | RX12M_A, OPD12M_A, OPD3M_A, OPDCHRONIC_A, OPDFREQ_A
+`gad7total` | input | quant | Subject's total score on the GAD-7 anxiety scale (scale units 0 - 21) | **SUM(**GAD71_A, GAD72_A, GAD73_A, GAD74_A, GAD75_A, GAD76_A, GAD77_A**)**
+`phq8total` | input | quant | Subject's total score on the PHQ-8 depression scale (scale units 0 - 24) | **SUM(**PHQ81_A, PHQ82_A, PHQ83_A, PHQ84_A, PHQ85_A, PHQ86_A, PHQ87_A, PHQ88_A**)**
+`num_pain_locations` | input | quant | Total number of locations in which subject reported being bothered at least "a little" by pain in the past three months (0 - 6) | PAIBACK3M_A, PAIULMB3M_A, PAILLMB3M_A, PAIHDFC3M_A, PAIAPG3M_A, PAITOOTH3M_A
+`ihm4pain_num` | outcome | quant | How many integrative health and medicine (IHM) modalities (i.e., chiropractic care, yoga/Tai Chi, meditation/guided imagery, or massage) subject used to manage pain in the past three months (0, 1, 2, 3, or 4) | PAICHIRO_A, PAIYOGA_A, PAIMASSAGE_A, PAIMEDITAT_A
+`race_ethnicity` | input | 4-cat | Race and Hispanic origin (NH White only, Hispanic, NH Black/African American only, or Other single and multiple races) | HISPALLP_A
+`fam_income` | input | quant | Adult annual family income | FAMINCTC_A
+`nonpharm_opioid` | outcome | 4-cat | Engagement in one of the following categories of care for pain in the past three months (None, Opioids only, Nonpharm only, Opioids + Nonpharm).| PAICHIRO_A, PAIYOGA_A, PAIMASSAGE_A, PAIMEDITAT_A, PAIPHYSTPY_A, PAITALKTPY_A, PAIPROGRAM_A, PAIGROUP_A, RX12M_A, OPD12M_A, OPD3M_A, OPDCHRONIC_A, OPDFREQ_A
+`ihm4pain_bin` | outcome | quant | Whether or not subject engaged in integrative health and medicine (IHM) modalities (i.e., chiropractic care, yoga/Tai Chi, meditation/guided imagery, or massage) to manage pain in the past three months (0, 1, 2, 3, or 4) | PAICHIRO_A, PAIYOGA_A, PAIMASSAGE_A, PAIMEDITAT_A
+`ihm4pain_cat` | outcome | quant | Which type of (IHM) modalities (i.e., chiropractic care, yoga/Tai Chi, meditation/guided imagery, or massage) subject used to manage pain in the past three months (None, Manual only, Mind-body only, Manual and mind-body) | PAICHIRO_A, PAIYOGA_A, PAIMASSAGE_A, PAIMEDITAT_A
+`wt_final` | weight | quant | Weight - Final Annual | WTFA_A
+
+## Numerical Description
+
+The following code provides a numerical summary of all variables included in the `projectb_data` dataset using the `describe()` function from the `Hmisc()` library.
+
+In examining the data, I confirm that:
+
+-   There are no impossible values for `age` (i.e., \> 85 or \< 18), `fam_income`, or `phq8total` (i.e., \> 24 or \< 0).
+-   Each factor variable is in an appropriate ascending order.
+-   All categorical and binary variables have at least 30 observations in each category.
+
+```{r}
+describe(projectb_data)
+```
+
+# Single Imputation
+
+## Missingness
+
+For this analysis, I assumed that the data were **Missing at Random (MAR)**. Specifically, I assumed that the probability of a predictor missing data depended upon available information from the other predictors. For example, missing `phq8total` data may be related to other variables such as how much pain limited the subject's life or work activities (`painlimit_lifework`) or `race_ethnicity` rather than their level of depression. In this situation, certain subjects may have been less likely to rate their anxiety based on their other characteristics. Thus, single imputation was warranted and required as missingness could be accounted for by studying variables with complete information. Missing NOT at Random (MNAR) was not an appropriate assumption here as there was no indication in the data or the [2019 NHIS Codebook](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/NHIS/2019/adult-codebook.pdf) that data were missing due to the variables themselves.
+
+### Missing Values
+
+To explore missingness within the `projectb_data`, I first used the `n_miss()` to quantify total missing values.
+
+```{r}
+projectb_data |> n_miss()
+```
+
+### Missing Values Within Variables
+
+I then used the `miss_var_summary()` to determine which variables contained those 249 missing values. These variables included `phq8total`, `gad7total`, `education`, `num_pain_locations`, `age`, `painlimit_lifework`, and `sex`. Given the relative infrequency of missing data (highest = 1.50%), I expected that performing imputation would not alter subsequent models in any meaningful way.
+
+```{r}
+miss_var_summary(projectb_data) |>   flextable() |>
+  colformat_double(digits = 2) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+### Missing Values within Cases
+
+Finally, to understand missing values within cases, I used the `miss_case_table()` function, which revealed that 159 cases were missing 1 value, 42 cases were missing 2 values, and 2 cases were missing 3 values
+
+```{r}
+miss_case_table(projectb_data) |> flextable() |>
+  colformat_double(digits = 0) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+## Generating the Single Imputation Dataset
+
+To perform single imputation and generate the `projectb_si` dataset, I performed the following steps:
+
+-   Set a seed of 19900317 using the `set.seed()` function
+-   Created `projectb_si` as a `data.frame()` derived from `projectb_data`
+-   Used robust linear models to impute the quantitative variable `gad7total` based on the predictors with no missing values: `urban_rural`, `race_ethnicity`, `fam_income` and `opioid_freq3mo`, 
+-   Used robust linear models to impute the quantitative variable `phq8total` based on `gad7total` and the predictors with no missing values: `urban_rural`, `race_ethnicity`, `fam_income`, and `opioid_freq3mo`.
+-   Used classification and regression trees (`impute_cart()`) to impute the categorical variable `education` based on the now complete variable, `phq8total`, and the other complete predictors.
+-   Used predictive mean matching (`impute_pmm()`) to impute the quantitative integer variable `num_pain_locations` based on the now complete variable, `education`, and the other complete predictors as I wanted the imputation to be an integer.
+-   Used robust linear models to impute the quantitative variable `age` based on the now complete variable, `num_pain_locations`, and the other complete predictors.
+-   Used classification and regression trees to impute the categorical variable `painlimit_lifework` based on the now complete variable, `age`, and the other complete predictors.
+-   Used classification and regression trees to impute the categorical variable `sex` based on the now complete variable, `painlimit_lifework`, and the other complete predictors.
+-   Used the `as_tibble()` function to ensure `projectb_si` was stored as a tibble.
+-   I performed mutations to use the variable one in the survey design and transform covariates so that coefficients would represent meaningful increases in (1) `age10` [10 unit increment increase in age]; (2) `gad7total5unit` [5-unit increases in GAD-7]; (3) `phq8total5unit` [5-unit increases in PHQ-8]; (4) `fam_income10k` [10,000 dollar increase in family income]; (5) `fam_income10k` [1,000 dollar increase in family income].
+-   I created a meaningful factor for the `ihm4pain_bin_fact` variable (i.e., IHM vs. No IHM)
+-   Used the `n_miss()` function to verify that `projectb_si` contained no missing values.
+
+```{r}
+set.seed(19900317)
+projectb_si <- projectb_data |> data.frame() |>
+  impute_rlm(gad7total ~ urban_rural + race_ethnicity +
+               fam_income + opioid_freq3mo) |>
+  impute_rlm(phq8total ~ gad7total + urban_rural + race_ethnicity +
+               fam_income + opioid_freq3mo) |>
+  impute_cart(education ~ phq8total + gad7total + urban_rural + race_ethnicity +
+               fam_income + opioid_freq3mo) |>
+  impute_pmm(num_pain_locations ~ phq8total + opioid_freq3mo + education + gad7total + 
+               urban_rural + race_ethnicity + fam_income) |>
+  impute_rlm(age ~ phq8total + num_pain_locations + opioid_freq3mo + education + 
+               gad7total + urban_rural + race_ethnicity + 
+               fam_income) |>
+  impute_cart(painlimit_lifework ~ phq8total + age + num_pain_locations + 
+                opioid_freq3mo + education + gad7total + 
+                urban_rural + race_ethnicity + fam_income) |>
+  impute_cart(sex ~ phq8total + painlimit_lifework + age + num_pain_locations + 
+                opioid_freq3mo + education + gad7total + 
+                urban_rural + race_ethnicity + fam_income) |>
+  as_tibble() |>
+  mutate(one = 1,
+         age10 = age/10,
+         gad7total5unit = gad7total/5,
+         phq8total5unit = phq8total/5,
+         fam_income10k = round(fam_income/10000, digits = 2),
+         fam_income1k = round(fam_income/1000, digits = 2),
+         ihm4pain_bin_fact = factor(case_when(ihm4pain_bin == 0 ~ "No IHM",
+                                              ihm4pain_bin == 1 ~ "IHM")))
+n_miss(projectb_si)
+```
+
+# Model 1: Engagement in IHM
+
+**For Model 1, I sought to answer the question:**
+
+> Which demographic, mental health, and pain-related variables are associated with engagement in the number of IHM modalities used for pain in the past 3 months among adults with chronic pain?
+
+In this analysis, I chose to predict `ihm4pain_num` based on 10 variables: `age10`, `sex`, `education`, `urban_rural`, `painlimit_lifework`, `opioid_freq3mo`, `phq8total5unit`, `num_pain_locations`, `race_ethnicity`, and `fam_income10k`.
+
+## Table 1: Bivariate Analysis
+
+The following code details the steps taken to generate Table 1.
+
+### Create Survey Design
+
+```{r}
+nhis_des <- svydesign(data = projectb_si, id = ~ subject_id,
+                        weights = ~ wt_final, nest = TRUE)
+```
+
+### Total population represented
+
+```{r}
+total_n <- svytotal(~ one, nhis_des, na.rm = FALSE) |> as_tibble() |>
+  mutate(Variable = "Total, n",
+         total = floor(total),
+         total = formatC(total, format = "d", big.mark = ","),
+         p.value = "") |>
+  select(Variable, All = total, p.value)
+```
+
+```{r}
+ihm_n <- svyby(~ one, ~ ihm4pain_bin, nhis_des, svytotal) |> as_tibble() |> filter(ihm4pain_bin == 1) |> select(IHM = one) |>
+  mutate(IHM = round(IHM),
+         IHM = formatC(IHM, format = "d", big.mark = ","))
+no_ihm_n <- svyby(~ one, ~ ihm4pain_bin, nhis_des, svytotal) |> as_tibble() |> filter(ihm4pain_bin == 0) |> select(NoIHM = one) |>
+  mutate(NoIHM = round(NoIHM),
+         NoIHM = formatC(NoIHM, format = "d", big.mark = ","))
+total_n <- bind_cols(total_n, ihm_n, no_ihm_n) |>
+  mutate(All = as.character(All),
+         IHM = as.character(IHM),
+         NoIHM = as.character(NoIHM))
+```
+
+```{r}
+total_n <- total_n |> select(Variable, All, IHM, NoIHM, p.value) 
+
+total_n |>
+  flextable() |>
+  autofit() |>
+  bold(bold = TRUE, part = "header") |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+### Crosstabulation
+
+```{r}
+style_percent_1digit <- purrr::partial(gtsummary::style_percent, digits = 1)
+style_number_1digit <- purrr::partial(gtsummary::style_number, digits = 1)
+
+table1_cross <- nhis_des |>
+  tbl_svysummary(
+    include = c(age, sex, race_ethnicity, education, 
+                fam_income1k, urban_rural, num_pain_locations,
+                painlimit_lifework, opioid_freq3mo, phq8total),
+    type = c(num_pain_locations = "continuous",
+             fam_income = "continuous"),
+    statistic = list(all_continuous()  ~ "{mean}",
+                     all_categorical() ~ "{p}"),
+    label = list(age ~ "Age in years, mean (95% CI)",
+                 sex ~ "Sex, % (95% CI)",
+                 race_ethnicity ~ "Race/Ethnicity, % (95% CI)",
+                 education ~ "Education, % (95% CI)",
+                 fam_income1k ~ "Family income in $1000s, mean (95% CI)",
+                 urban_rural ~ "Proximity to metro area, % (95% CI)",
+                 num_pain_locations ~ "Number of pain locations, mean (95% CI)",
+                 painlimit_lifework ~ "Pain limiting life/work, % (95% CI)",
+                 opioid_freq3mo ~ "Opioid use in past 3 months, % (95% CI)",
+                 phq8total ~ "PHQ-8 total, mean (95% CI)"),
+    digits = list(all_continuous() ~ 1,
+                  all_categorical() ~ 1),
+    by = ihm4pain_bin_fact) |>
+  add_overall() |>
+  add_ci(pattern = "{stat} ({ci})", 
+         style_fun = list(all_categorical() ~ style_percent_1digit, 
+                          all_continuous() ~ style_number_1digit),
+         statistic = list(all_categorical() ~ "{conf.low}-{conf.high}", 
+                          all_continuous() ~ "{conf.low}-{conf.high}")) |>
+  add_p(pvalue_fun = function(x) style_pvalue(x, digits = 3)) |>
+  modify_header(label = "Variable",
+                stat_0 ~ "All",
+                stat_1 ~ "IHM",
+                stat_2 ~ "NoIHM",
+                p.value ~ "p.value")
+
+table1_cross
+```
+
+### Assemble Table 1 Tibble
+
+```{r}
+table1_cross <- table1_cross |> as.data.frame() |> as_tibble()
+
+table1_cross[is.na(table1_cross)] <- ""
+
+table1_cross$p.value <- sub("0\\.",".", table1_cross$p.value)
+table1_cross$p.value <- sub(" ","", table1_cross$p.value)
+
+table1 <- bind_rows(total_n, table1_cross) |>
+  rename("No IHM" = NoIHM,
+         "All with chronic pain" = All,
+         "Weighted variable" = Variable,
+         "P value" = p.value)
+```
+
+### Print Table 1
+
+I used flextable to format Table 1.
+
+```{r}
+table1 |> flextable() |>
+  add_header_lines(values = "Table 1: Socio-Demographic, Pain, and Mental Health Characteristics by IHM Engagement") |>
+  bold(bold = TRUE, part = "header") |>
+  bold(i = c(1, 2, 3, 6, 11, 17, 18, 23:24, 29, 34), j = 1,  bold = TRUE) |>
+  padding(i = c(4:5, 7:10, 12:16, 19:22, 25:28, 30:33), j = 1, padding.left = 20) |>
+  add_footer_lines(values = "Abbreviations: CI, confidence interval; PHQ-8, Patient Health Questionnaire-8; GED, general equivalency diploma; IHM, integrative health and medicine; metro, metropolitan; NH, Non-Hispanic",
+                   top = FALSE) |>
+  flextable::footnote(i = c(2, 17, 23, 34), j = 5, 
+                      ref_symbols = "a",
+                      value = as_paragraph("Wilcoxon rank-sum test for complex survey samples")) |>
+  flextable::footnote(i = c(3, 6, 11, 18, 24, 29), 
+                      j = 5, 
+                      ref_symbols = "b",
+                      value = as_paragraph("Chi-squared test with Rao & Scott’s second-order correction")) |>
+  autofit(part = c("body", "header"))
+```
+
+
+## Splitting into Training and Testing Samples
+
+I then used the `initial_split()`, `training()`, and `testing()` functions to generate `projectb_si_train` (training data) and `projectb_si_test` (testing data), each with *n* = 3557 subjects.
+
+```{r}
+set.seed(19900317)
+
+projectb_split <- initial_split(projectb_si, prop = 0.5)
+
+projectb_si_train <- training(projectb_split)
+projectb_si_test <- testing(projectb_split)
+
+nrow(projectb_si_train)
+nrow(projectb_si_test)
+```
+
+## Scatterplot Matrix and Collinearity
+
+### Scatterplot Matrix of Quantitative Predictors with Outcome
+
+To investigate issues of collinearity prior to fitting models, I generated a series of scatterplot matrices using `ggpairs()`. First I assessed the relationship between the quantitative outcomes and `ihm4pain_num`.
+
+```{r, message = FALSE}
+temp1quant <- projectb_si_train |> 
+  select(age10, phq8total5unit, num_pain_locations, fam_income10k, ihm4pain_num)
+
+ggpairs(temp1quant, 
+        title = "Scatterplot Matrix of Quantitative Variables with Outcome",
+        lower = list(combo = wrap("facethist", bins = 20)))
+rm(temp1quant)
+```
+
+In examining the plot above, there do not appear to be any strong (i.e., \> 0.6) correlations between quantitative predictors and the outcome.
+
+### Scatterplot Matrix of Categorical Variables with Outcome
+
+Then, I looked at the relationships between three of the categorical predictors and `ihm4pain_num` using `ggpairs()`.
+
+```{r, message = FALSE}
+temp2cat1 <- projectb_si_train |> 
+  select(sex, education, urban_rural, ihm4pain_num)
+
+ggpairs(temp2cat1, 
+        title = "Scatterplot Matrix of Categorical Variables with Outcome",
+        lower = list(combo = wrap("facethist", bins = 20)))
+rm(temp2cat1)
+```
+
+### Scatterplot Matrix of Remaining Categorical Variables with Outcome
+
+Finally, I looked at the relationships between the two remaining categorical predictors and `ihm4pain_num` using `ggpairs()`.
+
+```{r, message = FALSE}
+temp2cat2 <- projectb_si_train |> 
+  select(painlimit_lifework, opioid_freq3mo, race_ethnicity, ihm4pain_num)
+
+ggpairs(temp2cat2, 
+        title = "Scatterplot Matrix of Categorical Variables with Outcome",
+        lower = list(combo = wrap("facethist", bins = 20)))
+rm(temp2cat2)
+```
+
+To investigate this further, I calculated variance inflation factors (VIF) for each variable using the `vif()` function. **Given the recommendation to look closely at any VIF value that is greater than 5, there does not seem to be an issue with collinearity in this full model as all VIF values are less than 1.4.**
+
+```{r}
+vif(lm(ihm4pain_num ~ age10 + sex + education +
+                     urban_rural + painlimit_lifework + opioid_freq3mo +
+                     phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity, 
+                   data = projectb_si_train))
+```
+
+## Considering Non-Linear Terms
+
+To determine how best to potentially spend degrees of freedom on non-linear terms, I generated a Spearman $\rho^2$ plot using the `plot()` and `spearman2()`functions.
+
+```{r}
+plot(spearman2(ihm4pain_num ~ age10 + sex + education +
+                 urban_rural + painlimit_lifework + opioid_freq3mo +
+                 phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity, 
+               data = projectb_si_train))
+```
+
+The plot suggests that I consider, for example, an interaction between `education` and `age10` as a non-linear term. However, given that 1) this model already contains 21 degrees of freedom, I opted not to include any non-linear terms.
+
+## Fitting Models for Comparison
+
+I chose to compare the following 6 modeling approaches for `m1` before choosing a final version.
+
+1.  Poisson
+2.  Negative binomial regression
+3.  Zero-inflated Poisson
+4.  Zero-inflated negative binomial
+5.  Hurdle with Poisson
+6.  Hurdle with negative binomial
+
+In the following series of code chunks, I performed the following
+
+-   Fit each model using the appropriate function
+-   Generated a summary of fit statistics including $R^2$, RMSE, MAE, AIC, and BIC using various functions including `augment()`, `glance()`, `metric_set()`, and `predict()`.
+-   Used functions including `mutate()`, `group_by()`, and `summarize()` to pivot the fit statistics from each model into a tidy tibble for combination later.
+
+### Poisson (`m1_pois`)
+
+```{r}
+m1_pois <- glm(ihm4pain_num ~ age10 + sex + education +
+                 urban_rural + painlimit_lifework + opioid_freq3mo +
+                 phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity, 
+                 data = projectb_si_train, family = "poisson")
+
+m1_pois_aug <- augment(m1_pois, projectb_si_train, type.predict = "response")
+m1_pois_glance <- glance(m1_pois)
+
+mets <- metric_set(rsq, rmse, mae)
+
+m1_pois_summary <-
+  mets(m1_pois_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_pois",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_pois_summary <- m1_pois_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_pois_summary <- bind_cols(m1_pois_summary, m1_pois_glance) |>
+  select(-c(logLik))
+summary(m1_pois)
+```
+
+### Negative Binomial Regression (`m1_nb`)
+
+```{r, warning = FALSE}
+m1_nb <- glm.nb(ihm4pain_num ~ age10 + sex + education +
+                 urban_rural + painlimit_lifework + opioid_freq3mo +
+                 phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity, 
+               data = projectb_si_train)
+
+m1_nb_aug <- augment(m1_nb, projectb_si_train, type.predict = "response")
+m1_nb_glance <- glance(m1_nb)
+
+m1_nb_summary <-
+  mets(m1_nb_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_nb",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_nb_summary <- m1_nb_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_nb_summary <- bind_cols(m1_nb_summary, m1_nb_glance) |>
+  select(-c(logLik))
+summary(m1_nb)
+```
+
+### Zero-inflated Poisson (`m1_zip`)
+
+```{r, warning = FALSE}
+m1_zip <- zeroinfl(ihm4pain_num ~ age10 + sex + education +
+                 urban_rural + painlimit_lifework + opioid_freq3mo +
+                 phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity, 
+                 data = projectb_si_train)
+
+m1_zip_aug <- projectb_si_train |>
+    mutate(".fitted" = predict(m1_zip, type = "response"),
+           ".resid" = resid(m1_zip, type = "response"))
+
+m1_zip_summary <-
+  mets(m1_zip_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_zip",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_zip_summary <- m1_zip_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_zip_summary <- m1_zip_summary |>
+  mutate(AIC = AIC(m1_zip),
+         BIC = BIC(m1_zip))
+summary(m1_zip)
+```
+
+### Zero-inflated Negative Binomial (`m1_zinb`)
+
+```{r, warning = FALSE}
+m1_zinb <- zeroinfl(ihm4pain_num ~ age10 + sex + education +
+                          urban_rural + painlimit_lifework + opioid_freq3mo +
+                          phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity,
+                        dist = "negbin", data = projectb_si_train)
+
+m1_zinb_aug <- projectb_si_train |>
+    mutate(".fitted" = predict(m1_zinb, type = "response"),
+           ".resid" = resid(m1_zinb, type = "response"))
+
+m1_zinb_summary <-
+  mets(m1_zinb_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_zinb",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_zinb_summary <- m1_zinb_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_zinb_summary <- m1_zinb_summary |>
+  mutate(AIC = AIC(m1_zinb),
+         BIC = BIC(m1_zinb))
+summary(m1_zinb)
+```
+
+### Hurdle with Poisson (`m1_hurdle_pois`)
+
+```{r, warning = FALSE}
+m1_hurdle_pois <- hurdle(ihm4pain_num ~ age10 + sex + race_ethnicity + education +
+                           fam_income10k + urban_rural + num_pain_locations +
+                           painlimit_lifework + opioid_freq3mo + phq8total5unit,
+                        dist = "poisson", zero.dist = "binomial", 
+                        data = projectb_si_train)
+
+m1_hurdle_pois_aug <- projectb_si_train |>
+    mutate(".fitted" = predict(m1_hurdle_pois, type = "response"),
+           ".resid" = resid(m1_hurdle_pois, type = "response"))
+
+m1_hurdle_pois_summary <-
+  mets(m1_hurdle_pois_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_hurdle_pois",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_hurdle_pois_summary <- m1_hurdle_pois_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_hurdle_pois_summary <- m1_hurdle_pois_summary |>
+  mutate(AIC = AIC(m1_hurdle_pois),
+         BIC = BIC(m1_hurdle_pois))
+summary(m1_hurdle_pois)
+```
+
+### Hurdle with Negative Binomial (`m1_hurdle_nb`)
+
+```{r, warning = FALSE}
+m1_hurdle_nb <- hurdle(ihm4pain_num ~ age10 + sex + education +
+                          urban_rural + painlimit_lifework + opioid_freq3mo +
+                          phq8total5unit + num_pain_locations + fam_income10k + race_ethnicity,
+                       dist = "negbin", zero.dist = "binomial", 
+                       data = projectb_si_train)
+
+m1_hurdle_nb_aug <- projectb_si_train |>
+    mutate(".fitted" = predict(m1_hurdle_nb, type = "response"),
+           ".resid" = resid(m1_hurdle_nb, type = "response"))
+
+m1_hurdle_nb_summary <-
+  mets(m1_hurdle_nb_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_hurdle_nb",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_hurdle_nb_summary <- m1_hurdle_nb_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_hurdle_nb_summary <- m1_hurdle_nb_summary |>
+  mutate(AIC = AIC(m1_hurdle_nb),
+         BIC = BIC(m1_hurdle_nb))
+summary(m1_hurdle_nb)
+```
+
+## Comparing `m1` Versions
+
+### Comparing with Rootograms
+
+To begin a comparison of the 4 variations of Model 1, I generated four rootogram plots using the `countreg::rootogram()` function.
+
+```{r, message = FALSE}
+#| fig-height: 8
+par(mfrow = c(3,2))
+countreg::rootogram(m1_pois, main = "Rootogram for m1_pois")
+countreg::rootogram(m1_nb, main = "Rootogram for m1_nb")
+countreg::rootogram(m1_zip, main = "Rootogram for m1_zip")
+countreg::rootogram(m1_zinb, main = "Rootogram for m1_zinb")
+countreg::rootogram(m1_hurdle_pois, main = "Rootogram for m1_hurdle_pois")
+countreg::rootogram(m1_hurdle_nb, main = "Rootogram for m1_hurdle_nb")
+par(mfrow = c(1,1))
+```
+
+Looking at the plots above, there is a clear improvement observed between 1) the Poisson (`m1_pois`) and negative binomial (`m1_nb`) models; and 2) the zero-inflated (`m1_zip` and `m1_zinb`) and hurdle (`m1_hurdle_pois` and `mt_hurdle_nb`) models as the latter appear to fit 0 counts perfectly and lack the over/under-fitting of counts 1-3. However, there do not appear to be any noticeable differences in predicting counts between the bottom four models. Furthermore, it appears each model predicts counts of `ihm4pain_num` \> 4, but not to a substantial degree. Certainly, some subjects may have engaged in more than four IHM modalities for pain, but these were not measured in the 2019 NHIS.
+
+### Comparing with Fit Statistics
+
+To further examine differences, I generated `m1_summary` as a combination of the 6 previous model summaries using the `bind_rows()` function. I then selected the Model, $R^2$, RMSE, MAE, AIC, and BIC values for output.
+
+```{r}
+m1_summary <- bind_rows(m1_pois_summary, m1_nb_summary, 
+                        m1_zip_summary, m1_zinb_summary, 
+                        m1_hurdle_pois_summary, m1_hurdle_nb_summary)
+
+m1_summary |> select(Model, R2, RMSE, MAE, AIC, BIC) |>
+  flextable() |>
+  colformat_double(j = 2:4, digits = 3) |>
+  colformat_double(j = 5:6, digits = 0) |>
+  bold(i = 5, j = 1:6, bold = TRUE) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+Similar to the rootograms, there is a clear improvement in $R^2$ between 1) the Poisson (`m1_pois`) and negative binomial (`m1_nb`) models; and 2) the zero-inflated (`m1_zip` and `m1_zinb`) and hurdle (`m1_hurdle_pois` and `mt_hurdle_nb`) models. **m1_hurdle_pois** appears to be the best fit based on it's $R^2$ (0.121), RMSE (0.805), and AIC (6780 \[lowest overall\]). Importantly, `m1_hurdle_pois` has the lowest BIC among the four models that had better rootograms in the plot above.
+
+### Comparing with Vuong tests
+
+Finally, given the inclination to use `m1_hurdle_pois`, I used the `vuong()` function to compare it to the other models.
+
+**`m1_hurdle_pois` v. `m1_pois`**
+
+```{r}
+vuong(m1_hurdle_pois, m1_pois)
+```
+
+`m1_hurdle_pois` is a better fit than `m1_pois` based on small *p*-values from the the Raw, and AIC-corrected Vuong tests.
+
+**`m1_hurdle_pois` v. `m1_nb`**
+
+```{r}
+vuong(m1_hurdle_pois, m1_nb)
+```
+
+`m1_hurdle_pois` is a better fit than `m1_nb` based on small *p*-values from the the Raw Vuong test.
+
+**`m1_hurdle_pois` v. `m1_zip`**
+
+```{r}
+vuong(m1_hurdle_pois, m1_zip)
+```
+
+`m1_hurdle_pois` is not meaningfully different than `m1_zip` (*p* = .352).
+
+**`m1_hurdle_pois` v. `m1_zinb`**
+
+```{r}
+vuong(m1_hurdle_pois, m1_zinb)
+```
+
+`m1_hurdle_pois` is not meaningfully different than `m1_zinb` (*p* = .352).
+
+**`m1_hurdle_pois` v. `m1_hurdle_nb`**
+
+```{r}
+vuong(m1_hurdle_pois, m1_hurdle_nb)
+```
+
+`m1_hurdle_pois` is not meaningfully different than `m1_hurdle_nb` (*p* = .497).
+
+## Final Model Choice
+
+Based on a combination of the rootograms, the fit statistics, and the Vuong tests, I chose **`m1_hurdle_pois`** as the model for the count outcome.
+
+The hurdle model also makes sense given its description (Ford 2016).
+
+> The hurdle model is a two-part model that specifies one process for zero counts and another process for positive counts. The idea is that positive counts occur once a threshold is crossed, or put another way, a hurdle is cleared. If the hurdle is not cleared, then we have a count of 0.
+
+Conceptually, moving from no engagement in IHM modalities for pain to engaging in any number of IHM modalities for pain seems like a hurdle to model independently of the count data.
+
+## Fitting Weighted Hurdle Model
+
+In the following code, I added weights to `m1_hurdle_pois` model using the code, `weights = wt_final/mean(wt_final)`. I then printed a summary of the model.
+
+```{r, warning = FALSE}
+m1_hurdle_pois <- hurdle(ihm4pain_num ~ age10 + sex + race_ethnicity + education +
+                           fam_income10k + urban_rural + num_pain_locations +
+                           painlimit_lifework + opioid_freq3mo + phq8total5unit,
+                        dist = "poisson", zero.dist = "binomial", 
+                        weights = wt_final/mean(wt_final),
+                        data = projectb_si_train)
+
+mets <- metric_set(rsq, rmse, mae)
+
+m1_hurdle_pois_aug <- projectb_si_train |>
+    mutate(".fitted" = predict(m1_hurdle_pois, type = "response"),
+           ".resid" = resid(m1_hurdle_pois, type = "response"))
+
+m1_hurdle_pois_summary <-
+  mets(m1_hurdle_pois_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_hurdle_pois",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1_hurdle_pois_summary <- m1_hurdle_pois_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+
+m1_hurdle_pois_summary <- m1_hurdle_pois_summary |>
+  mutate(AIC = AIC(m1_hurdle_pois),
+         BIC = BIC(m1_hurdle_pois))
+
+summary(m1_hurdle_pois)
+```
+
+
+## Model Coefficients
+
+To generate a singular summary of coefficients from `m1_hurdle_pois`, I performed the following
+
+-   Generated an initial `m1_hurdle_pois_coef` tibble containing the variables `Type` (i.e., count or non-zero), `Group` (i.e., each variable group), and `Comparison` (e.g., Age +10yrs, Male v. Female) to match the output from `m1_hurdle_pois`
+-   Generated `m1_hurdle_pois_pe` as a tibble of the exponentiated coefficients from `m1_hurdle_pois`
+-   Generated `m1_hurdle_pois_ci` as a tibble of the exponentiated 95% CI from `m1_hurdle_pois`
+-   Bound all of the above into the tibble, `m1_hurdle_pois_coef`.
+
+```{r}
+m1_hurdle_pois_coef <- tibble(Type = c("count", "count", "count", 
+                                       "count", "count", "count",
+                                       "count", "count", "count",
+                                       "count", "count", "count",
+                                       "count", "count", "count", 
+                                       "count", "count", "count",
+                                       "count", "count", "count", "count",
+                                       "non-zero", "non-zero", "non-zero", 
+                                       "non-zero", "non-zero", "non-zero",
+                                       "non-zero", "non-zero", "non-zero", 
+                                       "non-zero", "non-zero", "non-zero",
+                                       "non-zero", "non-zero", "non-zero", 
+                                       "non-zero", "non-zero", "non-zero",
+                                       "non-zero", "non-zero", "non-zero", "non-zero"),
+                              Group = c("(Intercept)", "Age", "Sex", 
+                                        "Race/Ethnicity", "Race/Ethnicity", "Race/Ethnicity",
+                                        "Education", "Education", 
+                                        "Education", "Education", 
+                                        "Family income", 
+                                        "Proximity to metro area", "Proximity to metro area",
+                                        "Proximity to metro area", 
+                                        "Number of pain locations", 
+                                        "Pain limiting life or work", 
+                                        "Pain limiting life or work",
+                                        "Pain limiting life or work", 
+                                        "Opioid use past 3 mo", 
+                                        "Opioid use past 3 mo",
+                                        "Opioid use past 3 mo", 
+                                        "PHQ-8", 
+                                        "(Intercept)", "Age", "Sex", 
+                                        "Race/Ethnicity", "Race/Ethnicity", "Race/Ethnicity",
+                                        "Education", "Education", 
+                                        "Education", "Education", 
+                                        "Family income", 
+                                        "Proximity to metro area", "Proximity to metro area",
+                                        "Proximity to metro area", 
+                                        "Number of pain locations", 
+                                        "Pain limiting life or work", 
+                                        "Pain limiting life or work",
+                                        "Pain limiting life or work", 
+                                        "Opioid use past 3 mo", 
+                                        "Opioid use past 3 mo",
+                                        "Opioid use past 3 mo", 
+                                        "PHQ-8"),
+                              Comparison = c("(Intercept)", "Age +10yrs", 
+                                             "Male v. Female", 
+                                             "Hispanic v. NH White",
+                                             "NH Black v. NH White",
+                                             "Other v. NH White",
+                                             "HS/GED v. < HS", 
+                                             "Some College v. < HS", 
+                                             "Assoc/Bach v. < HS",
+                                             "Masters/PhD v. < HS", 
+                                             "Fam income +$10,000",
+                                             "M/S metro v. Non-metro", 
+                                             "L fringe metro v. Non-metro",
+                                             "L central metro v. Non-metro", 
+                                             "Pain locations +1", 
+                                             "Pain limit some days v. Never", 
+                                             "Pain limit most days v. Never",
+                                             "Pain limit every day v. Never", 
+                                             "Opioids some days v. Never", 
+                                             "Opioids most days v. Never",
+                                             "Opioids every day v. Never", 
+                                             "PHQ-8 +5 units", 
+                                             "(Intercept)", "Age +10yrs", 
+                                             "Male v. Female", 
+                                             "Hispanic v. NH White",
+                                             "NH Black v. NH White",
+                                             "Other v. NH White",
+                                             "HS/GED v. < HS", 
+                                             "Some College v. < HS", 
+                                             "Assoc/Bach v. < HS",
+                                             "Masters/PhD v. < HS", 
+                                             "Fam income +$10,000",
+                                             "M/S metro v. Non-metro", 
+                                             "L fringe metro v. Non-metro",
+                                             "L central metro v. Non-metro", 
+                                             "Pain locations +1", 
+                                             "Pain limit some days v. Never", 
+                                             "Pain limit most days v. Never",
+                                             "Pain limit every day v. Never", 
+                                             "Opioids some days v. Never", 
+                                             "Opioids most days v. Never",
+                                             "Opioids every day v. Never", 
+                                             "PHQ-8 +5 units"))
+
+m1_hurdle_pois_pe <- exp(coef(m1_hurdle_pois)) |> as_tibble()
+m1_hurdle_pois_ci <- exp(confint(m1_hurdle_pois)) |> as_tibble() |>
+  clean_names() |>
+  rename(Conf.low = "x2_5_percent",
+         Conf.high = "x97_5_percent")
+
+m1_hurdle_pois_coef <- bind_cols(m1_hurdle_pois_coef, 
+                                 m1_hurdle_pois_pe, 
+                                 m1_hurdle_pois_ci) |>
+  rename(Estimate = value)
+```
+
+### Numeric Summary of Odds of `ihm4pain_num` != 0
+
+In the following code, I generated a numeric summary of the exponentiated coefficients from `m1_hurdle_pois` describing the odds of `ihm4pain_num` != 0.
+
+```{r}
+m1_hurdle_pois_coef |> 
+  filter(Type == "non-zero") |>
+  select(Group, Comparison, Estimate, Conf.low, Conf.high) |> 
+  mutate(Estimate = round(Estimate, digits = 3),
+         Conf.low = round(Conf.low, digits = 3),
+         Conf.high = round(Conf.high, digits = 3)) |>
+  rename(aOR = Estimate,
+         "95% CI Low" = Conf.low,
+         "95% CI High" = Conf.high) |>
+  flextable() |>
+  bold(bold = TRUE, part = "header") |>
+  add_header_lines(values = "Supplemental Table 1: aOR of Engagement in IHM Modalities for Pain") |>
+  autofit() |>
+  add_footer_lines(values = "Abbreviations: Assoc, associate’s; aOR, adjusted odds ratio; Bach, bachelor’s; CI, confidence interval; fam, family; PHQ-8, Patient Health Questionnaire-8; GED, general equivalency diploma; HS, high school; L, large; M, medium; metro, metropolitan; mo, months; NH, Non-Hispanic; S, small; v., versus; yrs, years", top = FALSE) |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+In examining the effects table above, I will summarize the effect of `Masters/PhD v. < HS` using two fictional cases: Luke Skywalker and Din Djarin
+
+Suppose Luke Skywalker and Din Djarin 1) have the same demographic profile (i.e., same age, male); 2) reside in rural areas; 3) rated similar challenges related to pain interfering with life or work in the past 3 months; 4) used the same amount of opioids for chronic pain within the past 3 months; 5) reported the same score on the PHQ-8; 6) reported the same number of locations where they were bothered at least "a little" by pain in the past three months; 7) have the same family income; and 8) are of the same race and ethnicity. However, Luke Skywalker has a PhD in being a Jedi while Din Djarin did not graduate "This is the Way" High School. In this scenario, `m1_hurdle_pois` predicts that Luke Skywalker's odds of `ihm4pain_num` != 0 will be 4.043 times that of Din Djarin.
+
+The 95% confidence interval for this estimated odds ratio for the effect of `Masters/PhD v. < HS` on `ihm4pain_num` != 0 is (2.815, 5.806). This confidence interval does not include one. Thus, holding all other variables constant, having a Masters, PhD, or professional degree is associated with higher odds of having engaged in an IHM modality to manage pain in the past three months.
+
+### Numeric Summary of Relative Change in Count of `ihm4pain_num`
+
+In the following code, I generated a numeric summary of the exponentiated coefficients from `m1_hurdle_pois` describing the predicted relative change in the count of `ihm4pain_num`.
+
+```{r}
+m1_hurdle_pois_coef |> 
+  filter(Type == "count") |>
+  select(Group, Comparison, Estimate, Conf.low, Conf.high) |> 
+  mutate(Estimate = round(Estimate, digits = 3),
+         Conf.low = round(Conf.low, digits = 3),
+         Conf.high = round(Conf.high, digits = 3)) |>
+  rename("Relative change" = Estimate,
+         "95% CI Low" = Conf.low,
+         "95% CI High" = Conf.high) |>
+  flextable() |>
+  bold(bold = TRUE, part = "header") |>
+  add_header_lines(values = "Supplemental Table 2: Relative Change in Count of IHM Modalities Used for Pain") |>
+  autofit() |>
+  add_footer_lines(values = "Abbreviations: Assoc, associate’s; Bach, bachelor’s; CI, confidence interval; fam, family; PHQ-8, Patient Health Questionnaire-8; GED, general equivalency diploma; HS, high school; L, large; M, medium; metro, metropolitan; mo, months; NH, Non-Hispanic; S, small; v., versus; yrs, years", top = FALSE) |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+In examining the effects table above, I will summarize the effect of `Age` using two fictional cases: Han Solo and Luke Skywalker
+
+Per the guidance by [Yoshida](https://rpubs.com/kaz_yos/pscl-2), given the response is positive (among those who have positive counts for engaging in IHM modalities), the average count is 0.701 (Intercept).
+
+Suppose Han Solo and Luke Skywalker 1) are both male and of the same race and ethnicity; 2) have the same level of education; 3) reside in rural areas; 4) rated similar challenges related to pain interfering with life or work in the past 3 months; 5) used the same amount of opioids for chronic pain within the past 3 months; 6) reported the same score on the PHQ-8; 7) reported the same number of locations where they were bothered at least "a little" by pain in the past three months; and 8) have the same family income. However, Han Solo is 10 years older than Luke Skywalker. In this scenario, `m1_hurdle_pois` predicts that the number of IHM modalities that Han Solo engaged in for pain in the past 3 months will be .866 times that of Luke's (13.4% lower than Luke's).
+
+The 95% confidence interval for this estimated effect of `age10` on `ihm4pain_num` is (0.825, 0.910). This confidence interval does not include one. Thus, holding all other variables constant, being 10 years older is associated with lower counts of IHM modalities used to manage pain in the past three months.
+
+### Visual Summary of Odds of `ihm4pain_num` != 0
+
+To visualize the effects of the covariates on odds of `ihm4pain_num` != 0, I first generated the `m1_coef_non0` tibble, limited to the "non-zero" coefficients. I then used `ggplot()` to plot the effects. Education covariates are placed on a separate axis given their size to not obscure the other covariates.
+
+```{r}
+#| fig-height: 6
+m1_coef_non0 <- m1_hurdle_pois_coef |> 
+  filter(Type == "non-zero", Comparison != "(Intercept)", Group != "Education") |>
+  mutate(Comparison = fct_inorder(Comparison, ordered = NA),
+         Comparison = fct_rev(Comparison))
+
+m1_coef_non0educ <- m1_hurdle_pois_coef |> 
+  filter(Type == "non-zero", Comparison != "(Intercept)", Group == "Education") |>
+  mutate(Comparison = fct_inorder(Comparison, ordered = NA),
+         Comparison = fct_rev(Comparison))
+
+p1 <- ggplot(m1_coef_non0, aes(x = Estimate, y = Comparison)) +
+  geom_vline(aes(xintercept = 1), linewidth = .25, linetype = 'dashed') +
+  geom_errorbarh(aes(xmax = Conf.high, xmin = Conf.low), linewidth = .5, 
+                 height = .2, color = 'gray50') +
+  geom_point(size = 2.5, color = uhred) +
+  labs(x = "aOR",
+       y = "",
+       title = "aOR of Engaging in ≥ 1 IHM Modality for Pain") +
+  scale_x_continuous(breaks = seq(0,4,0.25))
+
+p2 <- ggplot(m1_coef_non0educ, aes(x = Estimate, y = Comparison)) +
+  geom_vline(aes(xintercept = 1), linewidth = .25, linetype = 'dashed') +
+  geom_errorbarh(aes(xmax = Conf.high, xmin = Conf.low), linewidth = .5,
+                 height = .2, color = 'gray50') +
+  geom_point(size = 2.5, color = uhred) +
+  labs(x = "aOR",
+       y = "") +
+  scale_x_continuous(breaks = seq(0,8,0.5))
+
+p1/p2 + plot_layout(heights = c(5,1))
+```
+
+
+### Visual Summary of Estimated Relative Change in Count of `ihm4pain_num`
+
+To visualize the effects of the covariates on the estimated relative change in count of `ihm4pain_num`, I first generated the `m1_coef_count` tibble, limited to the "count" coefficients. I then used `ggplot()` to plot the effects. Education covariates are placed on a separate axis given their size to not obscure the other covariates.
+
+```{r}
+#| fig-height: 6
+m1_coef_count <- m1_hurdle_pois_coef |> 
+  filter(Type == "count", Comparison != "(Intercept)", Group != "Education") |>
+  mutate(Comparison = fct_inorder(Comparison, ordered = NA),
+         Comparison = fct_rev(Comparison))
+
+m1_coef_count_educ <- m1_hurdle_pois_coef |> 
+  filter(Type == "count", Comparison != "(Intercept)",
+         Group == "Education") |>
+  mutate(Comparison = fct_inorder(Comparison, ordered = NA),
+         Comparison = fct_rev(Comparison))
+
+p1 <- ggplot(m1_coef_count, aes(x = Estimate, y = Comparison)) +
+  geom_vline(aes(xintercept = 1), linewidth = .25, linetype = 'dashed') +
+  geom_errorbarh(aes(xmax = Conf.high, xmin = Conf.low), linewidth = .5, 
+                 height = .2, color = 'gray50') +
+  geom_point(size = 2.5, color = uhred) +
+  labs(x = "Relative Change in Count",
+       y = "",
+       title = "Relative Change in Count of IHM Modalities Used for Pain",
+       subtitle = "Assuming Engagement in > 0 IHM Modalities") +
+  scale_x_continuous(breaks = seq(0,7,0.25))
+
+p2 <- ggplot(m1_coef_count_educ, aes(x = Estimate, y = Comparison)) +
+  geom_vline(aes(xintercept = 1), linewidth = .25, linetype = 'dashed') +
+  geom_errorbarh(aes(xmax = Conf.high, xmin = Conf.low), linewidth = .5, 
+                 height = .2, color = 'gray50') +
+  geom_point(size = 2.5, color = uhred) +
+  labs(x = "Relative Change in Count",
+       y = "") +
+  scale_x_continuous(breaks = seq(0,7,0.5))
+
+p1/p2 + plot_layout(heights = c(5,1))
+```
+
+
+## Check Model Assumptions
+
+To generate a residuals vs. fitted plot from `m1_hurdle_pois`, I used `ggplot()` and `geom_point()`.
+
+```{r}
+ggplot(m1_hurdle_pois_aug, aes(x = .fitted, y = .resid)) +
+    geom_point() +
+    labs(title = "Residuals vs. Fitted `ihm4pain_num`",
+         subtitle = "Hurdle model with Poisson counts")
+```
+
+In examining the plot above, I see no major issues of concern.
+
+## Validating `m1_hurdle_pois`
+
+### Fit Summary in Test Data
+
+To validate `m1_hurdle_pois` in the `projectb_si_test` data, I performed the following to generate `m1test_hurdle_pois_summary`, a summary of fit statistics.
+
+-   I created `m1test_hurdle_pois_aug` as an augmentation of `m1_hurdle_pois` applied to the `projectb_si_test` data. This time I used `mutate()` to obtain .fitted and .resid values.
+-   I generated, $R^2$, RMSE, and MAE values using the `mets()` function.
+-   I used `group_by()` and `summarize()` to pivot `m1test_hurdle_pois_summary` such that there would be one column for each fit statistic.
+
+```{r, warning = FALSE}
+m1test_hurdle_pois_aug <- projectb_si_test |>
+    mutate(".fitted" = predict(m1_hurdle_pois, type = "response"),
+           ".resid" = resid(m1_hurdle_pois, type = "response"))
+
+m1test_hurdle_pois_summary <-
+  mets(m1test_hurdle_pois_aug, truth = ihm4pain_num, estimate = .fitted) |>
+  mutate(Model = "m1_hurdle_pois",
+         R2 = if_else(.metric == "rsq", .estimate, NA),
+         RMSE = if_else(.metric == "rmse", .estimate, NA),
+         MAE = if_else(.metric == "mae", .estimate, NA)) |> relocate(Model)
+
+m1test_hurdle_pois_summary <- m1test_hurdle_pois_summary |>
+  group_by(Model) |>
+  summarize(R2 = mean(R2, na.rm = TRUE),
+                   RMSE = mean(RMSE, na.rm = TRUE),
+                   MAE = mean(MAE, na.rm = TRUE))
+```
+
+### Comparing Fits in Datasets
+
+I then bound together `m1_hurdle_pois_summary` and `m1test_hurdle_pois_summary` into `m1_summaryfinal` to present a table comparing the $R^2$, RMSE, and MAE values from the training and testing data.
+
+```{r}
+m1_summaryfinal <- bind_rows(m1_hurdle_pois_summary, 
+                             m1test_hurdle_pois_summary) |>
+  mutate(Sample = c("Training", "Testing"))
+
+m1_summaryfinal |> select(Sample, R2, RMSE, MAE) |>
+  flextable() |>
+  colformat_double(digits = 4) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+In examining the table above, it appears the model does not perform as well in the testing data given the lower $R^2$ (0.0001 vs. 0.1182). `m1_hurdle_pois` also has higher RMSE and MAE in the testing data.
+
+### Table Comparing Observed and Predicted Counts
+
+To further explore the accuracy of `m1_hurdle_pois`, I created a table (`m1_countsum`) summarizing the observed and expected counts from the testing and training datasets as well as their respective `m1_hurdle_pois` applications.
+
+```{r}
+m1_countsum <- tibble(Source = c("Training data observations", 
+                                 "m1_hurdle_pois in training", 
+                                 "Test data observations", 
+                                 "m1_hurdle_pois in test"),
+                      ZeroIHM = c(sum(projectb_si_train$ihm4pain_num == 0),
+                                  round(sum(predict(m1_hurdle_pois, 
+                                                    type = "prob")[,1]),0),
+                                  sum(projectb_si_test$ihm4pain_num == 0),
+                                  round(sum(predict(m1_hurdle_pois, 
+                                                    newdata = projectb_si_test, 
+                                                    type = "prob")[,1]),0)),
+                      OneIHM = c(sum(projectb_si_train$ihm4pain_num == 1),
+                                 round(sum(predict(m1_hurdle_pois, 
+                                                   type = "prob")[,2]),0),
+                                 sum(projectb_si_test$ihm4pain_num == 1),
+                                 round(sum(predict(m1_hurdle_pois, 
+                                                   newdata = projectb_si_test, 
+                                                   type = "prob")[,2]),0)),
+                      TwoIHM = c(sum(projectb_si_train$ihm4pain_num == 2),
+                                 round(sum(predict(m1_hurdle_pois, 
+                                                   type = "prob")[,3]),0),
+                                 sum(projectb_si_test$ihm4pain_num == 2),
+                                 round(sum(predict(m1_hurdle_pois, 
+                                                   newdata = projectb_si_test, 
+                                                   type = "prob")[,3]),0)),
+                      ThreeIHM = c(sum(projectb_si_train$ihm4pain_num == 3),
+                                   round(sum(predict(m1_hurdle_pois, 
+                                                     type = "prob")[,4]),0),
+                                   sum(projectb_si_test$ihm4pain_num == 3),
+                                   round(sum(predict(m1_hurdle_pois, 
+                                                     newdata = projectb_si_test, 
+                                                     type = "prob")[,4]),0)),
+                      FourIHM = c(sum(projectb_si_train$ihm4pain_num == 4),
+                                  round(sum(predict(m1_hurdle_pois, 
+                                                    type = "prob")[,5]),0),
+                                  sum(projectb_si_test$ihm4pain_num == 4),
+                                  round(sum(predict(m1_hurdle_pois, 
+                                                    newdata = projectb_si_test, 
+                                                    type = "prob")[,5]),0))) |>
+  mutate(MoreThan4IHM = nrow(projectb_si_train) - (ZeroIHM + OneIHM + TwoIHM + ThreeIHM + FourIHM),
+         Total = (ZeroIHM + OneIHM + TwoIHM + ThreeIHM + 
+                    FourIHM + MoreThan4IHM)) |>
+  rename("0" = ZeroIHM,
+         "1" = OneIHM,
+         "2" = TwoIHM,
+         "3" = ThreeIHM,
+         "4" = FourIHM,
+         ">4" = MoreThan4IHM)
+```
+
+### Plot Comparing Observed and Predicted Counts
+
+To facilitate a visual comparison, I generated `m1_pivot` and a pair of plots comparing observed vs. predicted values in the training and test samples.
+
+```{r}
+#| fig-width: 8
+m1_pivot <- m1_countsum |>
+  select(-c(Total)) |>
+  pivot_longer(!Source, names_to = "Count", values_to = "Value") |>
+  mutate(Count = factor(Count, levels = c("0", "1", "2", "3", "4", ">4")))
+
+m1_pivot_train <- m1_pivot |>
+  filter(Source %in% c("Training data observations", 
+                       "m1_hurdle_pois in training")) |>
+  mutate(Source = if_else(Source == "Training data observations", 
+                          "Observed", "Predicted"),
+         Source = factor(Source, levels = c("Observed", "Predicted")))
+
+m1_pivot_test <- m1_pivot |>
+  filter(Source %in% c("Test data observations", 
+                       "m1_hurdle_pois in test")) |>
+  mutate(Source = if_else(Source == "Test data observations", 
+                          "Observed", "Predicted"),
+         Source = factor(Source, levels = c("Observed", "Predicted")))
+
+p1 <- ggplot(data = m1_pivot_train, aes(x = Count, y = Value, fill = Source)) +
+  geom_bar(stat = "identity", position = position_dodge(), alpha = 0.75) +
+  ylim(0, 2500) +
+  labs(x = "Count of IHM Modalities",
+       y = "Number of Subjects",
+       title = "Training Data (n = 3557)") + 
+  theme(legend.position="bottom",
+        legend.title = element_blank())
+
+p2 <- ggplot(data = m1_pivot_test, aes(x = Count, y = Value, fill = Source)) +
+  geom_bar(stat = "identity", position = position_dodge(), alpha = 0.75) +
+  ylim(0, 2500) +
+  labs(x = "Count of IHM Modalities",
+       y = "Number of Subjects",
+       title = "Test Data (n = 3557)") +
+  guides(fill="none")
+
+p1 + p2 +
+  plot_annotation("Comparing Observed v. Predicted Values in Weighted Hurdle Poisson Model")
+```
+```{r, echo = FALSE}
+m1_countsum |> flextable() |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+In examining the plots above, while there is slightly greater deviation from the observed counts in the test data, it appears the model performs quite well in predicting each level of the count of `ihm4pain_num` in both the training and test datasets.
+
+# Model 2: Nonpharmacologic Modalities Only vs. Opioids Only
+
+**For Model 2, I sought to answer the question:**
+
+> Which demographic, mental health, and pain-related variables are associated with engagement in exclusively nonpharmacologic modalities rather than opioid utilization in the past 3 months among U.S. adults with chronic pain?
+
+## Create Dataset
+
+For this model, the outcome was defined as engagement in nonpharmacologic modalities only (ie, engaging in IHM, a chronic pain self-management program, support groups, or physical, rehabilitative, occupational, or talk therapy while never using opioids) rather than opioids only (ie, using opioids on at least some days while not using any nonpharmacologic modalities). The already single-imputed data, `projectb_si`, were filtered to include the 3300 subjects engaging in either nonpharmacologic only or opioids only. With this new `m2_dataset_si` dataset, the outcome `nonpharm_over_opioid` was defined as 1 if "Nonpharm only" and 0 if "Opioids only."
+
+```{r}
+m2_dataset_si <- projectb_si |>
+  filter(nonpharm_opioid %in% 
+           c("Opioids only", "Nonpharm only")) |>
+  mutate(nonpharm_opioid = factor(nonpharm_opioid, 
+                                  levels = c("Nonpharm only", 
+                                             "Opioids only")),
+         nonpharm_over_opioid = 
+           if_else(nonpharm_opioid == "Nonpharm only", 1, 0))
+
+m2_dataset_si |> tabyl(nonpharm_opioid, nonpharm_over_opioid)
+```
+
+## Create Survey Design
+
+I then used the `svydesign()` function to generate the survey design.
+
+```{r}
+nhis_des2 <- svydesign(data = m2_dataset_si, id = ~ subject_id,
+                        weights = ~ wt_final, nest = TRUE)
+```
+
+## Total population represented
+
+The following code details the steps taken to generate a combined Table 2.
+
+```{r}
+total_n2 <- svytotal(~ one, nhis_des2, na.rm = FALSE) |> as_tibble() |>
+  mutate(Variable = "Total, n",
+         total = floor(total),
+         total = formatC(total, format = "d", big.mark = ","),
+         p.value = "") |>
+  select(Variable, All = total, p.value)
+```
+
+```{r}
+nonpharm_n <- svyby(~ one, ~ nonpharm_opioid, nhis_des2, svytotal) |> as_tibble() |> filter(nonpharm_opioid == "Nonpharm only") |> select(Nonpharm = one) |>
+  mutate(Nonpharm = round(Nonpharm),
+         Nonpharm = formatC(Nonpharm, format = "d", big.mark = ","))
+opioids_n <- svyby(~ one, ~ nonpharm_opioid, nhis_des2, svytotal) |> as_tibble() |> filter(nonpharm_opioid == "Opioids only") |> select(Opioids = one) |>
+  mutate(Opioids = round(Opioids),
+         Opioids = formatC(Opioids, format = "d", big.mark = ","))
+total_n2 <- bind_cols(total_n2, nonpharm_n, opioids_n) |>
+  mutate(All = as.character(All),
+         Nonpharm = as.character(Nonpharm),
+         Opioids = as.character(Opioids))
+```
+
+```{r}
+total_n2 <- total_n2 |> select(Variable, All, Nonpharm, Opioids, p.value) 
+
+total_n2 |>
+  flextable() |>
+  autofit() |>
+  bold(bold = TRUE, part = "header") |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+## Crosstabulation
+
+```{r}
+table2_cross <- nhis_des2 |>
+  tbl_svysummary(
+    include = c(age, sex, race_ethnicity, education, 
+                fam_income1k, urban_rural, num_pain_locations,
+                painlimit_lifework, phq8total),
+    type = c(num_pain_locations = "continuous",
+             fam_income = "continuous"),
+    statistic = list(all_continuous()  ~ "{mean}",
+                     all_categorical() ~ "{p}"),
+    label = list(age ~ "Age in years, mean (95% CI)",
+                 sex ~ "Sex, % (95% CI)",
+                 race_ethnicity ~ "Race/Ethnicity, % (95% CI)",
+                 education ~ "Education, % (95% CI)",
+                 fam_income1k ~ "Family income in $1000s, mean (95% CI)",
+                 urban_rural ~ "Proximity to metro area, % (95% CI)",
+                 num_pain_locations ~ "Number of pain locations, mean (95% CI)",
+                 painlimit_lifework ~ "Pain limiting life/work, % (95% CI)",
+                 phq8total ~ "PHQ-8 total, mean (95% CI)"),
+    digits = list(all_continuous() ~ 1,
+                  all_categorical() ~ 1),
+    by = nonpharm_opioid) |>
+  add_overall() |>
+  add_ci(pattern = "{stat} ({ci})", 
+         style_fun = list(all_categorical() ~ style_percent_1digit, 
+                          all_continuous() ~ style_number_1digit),
+         statistic = list(all_categorical() ~ "{conf.low}-{conf.high}", 
+                          all_continuous() ~ "{conf.low}-{conf.high}")) |>
+  add_p(pvalue_fun = function(x) style_pvalue(x, digits = 3)) |>
+  modify_header(label = "Variable",
+                stat_0 ~ "All",
+                stat_1 ~ "Nonpharm",
+                stat_2 ~ "Opioids",
+                p.value ~ "p.value")
+
+table2_cross
+```
+
+
+## Assemble Table 2 Tibble
+
+```{r}
+table2_cross <- table2_cross |> as.data.frame() |> as_tibble()
+
+table2_cross[is.na(table2_cross)] <- ""
+
+table2_cross$p.value <- sub("0\\.",".", table2_cross$p.value)
+table2_cross$p.value <- sub(" ","", table2_cross$p.value)
+
+table2 <- bind_rows(total_n2, table2_cross) |>
+  rename("Weighted variable" = Variable,
+         "Combined groups" = All,
+         "Nonpharm only" = Nonpharm,
+         "Opioids only" = Opioids,
+         "P value" = p.value)
+```
+
+## Print Table 2
+
+I printed Table 2 using the `flextable()` function.
+
+```{r}
+table2 |> flextable() |>
+  add_header_lines(values = "Table 2: Socio-Demographic, Pain, and Mental Health Characteristics By Nonpharmacologic Modality Engagement") |>
+  bold(bold = TRUE, part = "header") |>
+  add_footer_lines(values = "Abbreviations: CI, confidence interval; PHQ-8, Patient Health Questionnaire-8; GED, general equivalency diploma; metro, metropolitan; NH, Non-Hispanic; Nonpharm, nonpharmacologic", 
+                   top = FALSE) |>
+  padding(i = c(4:5, 7:10, 12:16, 19:22, 25:28), j = 1, 
+          padding.left = 20) |>
+  bold(i = c(1, 2, 3, 6, 11, 17:18, 23:24, 29), j = 1, bold = TRUE) |>
+  flextable::footnote(i = c(2, 17, 23, 29), j = 5, 
+                      ref_symbols = "a",
+                      value = as_paragraph("Wilcoxon rank-sum test for complex survey samples")) |>
+  flextable::footnote(i = c(3, 6, 11, 18, 24), 
+                      j = 5,
+                      ref_symbols = "b",
+                      value = as_paragraph("Chi-squared test with Rao & Scott’s second-order correction")) |>
+  autofit(part = c("body", "header"))
+```
+
+
+## Fit Weighted Logistic Model with Survey Weights
+
+I fit the model `m2_lrm_wt` with the `lrm()` function, defining weights with `weights = wt_final`.
+
+In this analysis, I chose to predict the outcome `nonpharm_over_opioid` based on 9 variables: `age`, `sex`, `race_ethnicity`, `education`, `fam_income1k` `urban_rural`, `num_pain_locations`, `painlimit_lifework`, and `phq8total`.
+
+```{r, warning = FALSE}
+set.seed(19900317)
+dd <- datadist(m2_dataset_si, adjto.cat = "first")
+options(datadist = "dd")
+
+m2_lrm_wt <- lrm(nonpharm_over_opioid ~ 
+                age + sex + race_ethnicity + education +
+                               fam_income1k + urban_rural + num_pain_locations +
+                               painlimit_lifework + phq8total,
+                weights = wt_final, normwt = TRUE,
+              data = m2_dataset_si, x = TRUE, y = TRUE)
+
+m2_lrm_wt
+```
+
+## Numeric Summary of Coefficients (`m2_coef_wt`)
+
+The following code generates a numeric summary of coefficients from the model and adds meaningful labels for comparison.
+
+```{r}
+m2_coef_wt <- summary(m2_lrm_wt, conf.int = 0.95) |> as_tibble() |>
+  filter(Type == 2) |>
+  mutate(Group = c("Age", "Family income",
+                   "Number of pain locations",
+                   "PHQ-8", 
+                   "Sex", 
+                   "Race/Ethnicity", "Race/Ethnicity", "Race/Ethnicity",
+                   "Education", "Education", 
+                   "Education", "Education", 
+                   "Proximity to metro area", "Proximity to metro area",
+                   "Proximity to metro area", 
+                   "Pain limiting life or work", 
+                   "Pain limiting life or work",
+                   "Pain limiting life or work"),
+         Comparison = c("Age 69 v. 46", 
+                        "Family income $85k v. $22k",
+                        "4 pain locations v. 2",
+                        "PHQ-8 score 8 v. 1",
+                        "Male v. Female", 
+                        "Hispanic v. NH White",
+                        "NH Black v. NH White",
+                        "Other v. NH White",
+                        "HS/GED v. < HS", 
+                        "Some College v. < HS", 
+                        "Assoc/Bach v. < HS",
+                        "Masters/PhD v. < HS", 
+                        "M/S metro v. Non-metro", 
+                        "L fringe metro v. Non-metro",
+                        "L central metro v. Non-metro", 
+                        "Pain limit some days v. Never", 
+                        "Pain limit most days v. Never",
+                        "Pain limit every day v. Never"),
+         Effect = as.numeric(Effect)) |>
+  rename(Lower0.95 = "Lower 0.95", Upper0.95 = "Upper 0.95") |>
+  mutate(Lower0.95 = as.numeric(Lower0.95), Upper0.95 = as.numeric(Upper0.95))
+
+m2_coef_wt <- m2_coef_wt |>
+  mutate(Comparison = factor(Comparison, levels = c("Age 69 v. 46",
+                                                    "Male v. Female",
+                                                    "Hispanic v. NH White",
+                                                    "NH Black v. NH White",
+                                                    "Other v. NH White",
+                                                    "HS/GED v. < HS", 
+                                                    "Some College v. < HS", 
+                                                    "Assoc/Bach v. < HS",
+                                                    "Masters/PhD v. < HS", 
+                                                    "Family income $85k v. $22k",
+                                                    "M/S metro v. Non-metro", 
+                                                    "L fringe metro v. Non-metro",
+                                                    "L central metro v. Non-metro", 
+                                                    "4 pain locations v. 2",
+                                                    "Pain limit some days v. Never", 
+                                                    "Pain limit most days v. Never",
+                                                    "Pain limit every day v. Never",
+                                                    "PHQ-8 score 8 v. 1"))) |>
+  arrange(Comparison)
+```
+
+The following code generates Supplemental Table 3, providing a numeric summmary of the coefficients from `m2_lrm_wt`.
+
+```{r}
+m2_coef_wt |> 
+  select(Group, Comparison, Effect, Lower0.95, Upper0.95) |> 
+  mutate(Effect = round(Effect, digits = 3),
+         Lower0.95 = round(Lower0.95, digits = 3),
+         Upper0.95 = round(Upper0.95, digits = 3)) |>
+  rename(aOR = Effect,
+         "95% CI Low" = Lower0.95,
+         "95% CI High" = Upper0.95) |>
+  flextable() |> 
+  bold(bold = TRUE, part = "header") |>
+  add_header_lines(values = "Supplemental Table 3: aOR of Engagement in Nonpharmacologic Only vs. Opioids Only") |>
+  autofit() |>
+  add_footer_lines(values = "Abbreviations: Assoc, associate’s; aOR, adjusted odds ratio; Bach, bachelor’s; CI, confidence interval; fam, family; PHQ-8, Patient Health Questionnaire-8; GED, general equivalency diploma; HS, high school; L, large; M, medium; metro, metropolitan; NH, Non-Hispanic; S, small; v., versus; yrs, years", top = FALSE) |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+## Effects Plot (`m2_coef_wt`)
+
+To visualize the effects of the covariates on odds of nonpharm_over_opioid = 1, I  used `ggplot()` to plot the effects. Education covariates are placed on a separate axis given their size to not obscure the other covariates.
+
+```{r}
+#| fig-height: 6
+m2_coef_plot_wt <- m2_coef_wt |> 
+  filter(Comparison != "(Intercept)", Group != "Education") |>
+  mutate(Comparison = fct_inorder(Comparison, ordered = NA),
+         Comparison = fct_rev(Comparison))
+
+m2_coef_plot_educ_wt <- m2_coef_wt |> 
+  filter(Comparison != "(Intercept)", Group == "Education") |>
+  mutate(Comparison = fct_inorder(Comparison, ordered = NA),
+         Comparison = fct_rev(Comparison))
+
+p1 <- ggplot(m2_coef_plot_wt, aes(x = Effect, y = Comparison)) +
+  geom_vline(aes(xintercept = 1), linewidth = .25, linetype = 'dashed') +
+  geom_errorbarh(aes(xmax = Upper0.95, xmin = Lower0.95), linewidth = .5,
+                 height = .2, color = 'gray50') +
+  geom_point(size = 2.5, color = uhred) +
+  labs(x = "aOR",
+       y = "",
+       title = "aOR of Using Nonpharmacologic Only vs. Opioids Only") +
+  scale_x_continuous(breaks = seq(0,8,0.5))
+
+p2 <- ggplot(m2_coef_plot_educ_wt, aes(x = Effect, y = Comparison)) +
+  geom_vline(aes(xintercept = 1), linewidth = .25, linetype = 'dashed') +
+  geom_errorbarh(aes(xmax = Upper0.95, xmin = Lower0.95), linewidth = .5,
+                 height = .2, color = 'gray50') +
+  geom_point(size = 2.5, color = uhred) +
+  labs(x = "aOR",
+       y = "") +
+  scale_x_continuous(breaks = seq(0,8,0.5))
+
+p1/p2 + plot_layout(heights = c(5,1))
+```
+
+## Summarizing Fit (`m2_coef_wt`)
+
+To summarize the fit of `m2_lrm_wt`, I simply entered `m2_lrm_wt` within the code. From the output, the Nagelkerke $R^2$ is 0.161 and the unvalidated area under the ROC curve (aka c-statistic) is 0.737.
+
+```{r}
+m2_lrm_wt
+```
+
+## Validating `m2_coef_wt`
+
+To validate `m2_lrm_wt`, I first set a seed of 19900317 using the `set.seed()` function. I then used the `validate()` function with 40 bootstrap repetitions to generate validated (index.corrected) $R^2$ and Dxy values. I stored this validated summary as `val_m2` so that I could obtain specific values for a summary table below.
+
+```{r}
+set.seed(19900317)
+val_m2 <- validate(m2_lrm_wt, method = "boot", B = 40)
+```
+
+```{r}
+fit_report <- tibble(Model = "m2") |>
+  mutate("Validated R2" = case_when(
+    Model == "m2" ~ val_m2[2,5]),
+    "Validated C stat" = case_when(
+      Model == "m2" ~  0.5 + (val_m2[1,5]/2)),
+    AIC = AIC(m2_lrm_wt),
+    BIC = BIC(m2_lrm_wt))
+    
+fit_report |> 
+  select(Model, "Validated R2", "Validated C stat", AIC, BIC) |>
+  flextable() |>
+  colformat_double(j = 2:3, digits = 3) |>
+  colformat_double(j = 4:5, digits = 0) |>
+  autofit() |>
+  theme_zebra(odd_header = "white") |>
+  hline_top(part="body")
+```
+
+
+## References
+
+Ford, C. (2016). Getting Started with Hurdle Models. University of Virginia Library. https://data.library.virginia.edu/getting-started-with-hurdle-models/
+
+Kroenke, K., Spitzer, R. L., & Williams, J. B. (2001). The PHQ-9: validity of a brief depression severity measure. Journal of General Internal Medicine, 16(9), 606-613. https://doi.org/10.1046/j.1525-1497.2001.016009606.x
+
+Löwe, B., Decker, O., Müller, S., Brähler, E., Schellberg, D., Herzog, W., & Herzberg, P. Y. (2008). Validation and standardization of the Generalized Anxiety Disorder Screener (GAD-7) in the general population. Medical Care, 46(3), 266-274. https://doi.org/10.1097/MLR.0b013e318160d093
+
+National Center for Health Statistics. (2021, 2021-04-05). 2019 National Health Interview Survey. National Center for Health Statistics. https://www.cdc.gov/nchs/nhis/2019nhis.htm
+
+Yoshida, K. (2014). Models for excess zeros using pscl package (Hurdle and zero-inflated regression models) and their interpretations. Retrieved May 1 from https://rpubs.com/kaz_yos/pscl-2
+
+Zelaya, C. E., Dahlhamer, J. M., Lucas, J. W., & Connor, E. M. (2020). Chronic Pain and High-impact Chronic Pain Among U.S. Adults, 2019.
+
+## Acknowledgments
+
+-   Robert J. Trager, DC (methodology, interpretation, literature review, first draft of introduction)
+-   Jeffery A. Dusek, PhD (methodology, interpretation)
+-   The National Center for Health Statistics (data collection)
+-   Thomas E. Love, PhD (methodology instruction)
+
+# Session Information
+
+```{r}
+xfun::session_info()
+```
